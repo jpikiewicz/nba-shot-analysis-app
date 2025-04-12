@@ -1,0 +1,11 @@
+# .streamlit/config.toml
+
+[theme]
+# Wybierz JEDEN z poniższych primaryColor:
+primaryColor="#1d428a"      # NBA Blue
+# primaryColor="#c9082a"      # LUB NBA Red
+
+backgroundColor="#ffffff"    # Biały
+secondaryBackgroundColor="#f0f2f6" # Jasnoszary dla tła drugorzędnego (np. sidebar)
+textColor="#000000"          # Czarny dla tekstu
+font="sans serif"
