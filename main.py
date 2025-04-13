@@ -1,8 +1,10 @@
-# nba_app_v4_with_comparison_rev2.py
-# Added dedicated model comparison tab
-# Revision 1: Implemented key naming convention and tab renaming
-# Revision 2: Added SHAP interpretability for XGBoost model
-# Revision 3 (by AI): Added League Average 2PT/3PT display in Rankings Tab
+# nba_app_v5_with_shap_interp.py
+# Revision History:
+# v1: Base functionality (Player/Team analysis, basic plots)
+# v2: Added KNN model evaluation
+# v3: Added XGBoost model evaluation & model comparison tab
+# v4: Revisions by AI/User (Key naming, SHAP plots, League Avg, Simple Actions, Shot Dist, Layout)
+# v5: Added dynamic SHAP interpretation comment below SHAP plots in XGBoost tab
 
 import streamlit as st
 import pandas as pd
@@ -21,7 +23,7 @@ import pytz
 from sklearn.compose import ColumnTransformer
 import xgboost as xgb
 import shap # Import SHAP
-import matplotlib.pyplot as plt # Import Matplotlib
+import matplotlib.pyplot as plt # Import Matplotlib for SHAP plots
 
 warnings.filterwarnings('ignore')
 
@@ -36,18 +38,12 @@ if 'active_view' not in st.session_state:
     st.session_state.active_view = "📊 Rankingi Skuteczności"
 
 # --- Ścieżka do pliku CSV ---
-CSV_FILE_PATH = 'nba_player_shooting_data_2023_24.csv' # Dostosuj!
+# UWAGA: Dostosuj ścieżkę do swojego pliku!
+CSV_FILE_PATH = 'nba_player_shooting_data_2023_24.csv'
 
 # --- Funkcje Pomocnicze ---
-# (Wszystkie funkcje pomocnicze z poprzedniej wersji pozostają bez zmian)
-# load_shooting_data, add_court_shapes, filter_data_by_player,
-# filter_data_by_team, get_basic_stats, plot_player_eff_vs_distance,
-# plot_shot_chart, calculate_hot_zones, plot_hot_zones_heatmap,
-# plot_shot_frequency_heatmap, plot_player_quarter_eff,
-# plot_player_season_trend, plot_grouped_effectiveness,
-# plot_comparison_eff_distance, plot_comparison_eff_by_zone,
-# calculate_top_performers
-# --- POCZĄTEK FUNKCJI POMOCNICZYCH (bez zmian) ---
+
+# --- POCZĄTEK FUNKCJI POMOCNICZYCH ---
 @st.cache_data
 def load_shooting_data(file_path):
     """Wczytuje i wstępnie przetwarza dane o rzutach graczy NBA."""
@@ -55,7 +51,7 @@ def load_shooting_data(file_path):
     try:
         # Sprawdzenie czy plik istnieje
         if not os.path.exists(file_path):
-             raise FileNotFoundError(f"Nie znaleziono pliku: {file_path}")
+            raise FileNotFoundError(f"Nie znaleziono pliku: {file_path}")
 
         data = pd.read_csv(file_path, parse_dates=['GAME_DATE'], low_memory=False) # Dodano low_memory=False
         # Komunikat o sukcesie będzie wyświetlony później
@@ -87,14 +83,14 @@ def load_shooting_data(file_path):
                 data['SHOT_MADE_FLAG'] = pd.to_numeric(data['SHOT_MADE_FLAG'], errors='coerce')
 
             elif pd.api.types.is_numeric_dtype(data['SHOT_MADE_FLAG']):
-                 if data['SHOT_MADE_FLAG'].isnull().any():
-                     nan_in_made_flag = True
-                 # Konwertuj na int, jeśli nie ma NaN, inaczej zostaw float i obsłuż NaN później
-                 if not data['SHOT_MADE_FLAG'].isnull().any():
-                     data['SHOT_MADE_FLAG'] = data['SHOT_MADE_FLAG'].astype(int)
+                if data['SHOT_MADE_FLAG'].isnull().any():
+                    nan_in_made_flag = True
+                # Konwertuj na int, jeśli nie ma NaN, inaczej zostaw float i obsłuż NaN później
+                if not data['SHOT_MADE_FLAG'].isnull().any():
+                    data['SHOT_MADE_FLAG'] = data['SHOT_MADE_FLAG'].astype(int)
             else: # Inny nieobsługiwany typ
-                 nan_in_made_flag = True # Zakładamy, że mogą być problemy
-                 data['SHOT_MADE_FLAG'] = pd.to_numeric(data['SHOT_MADE_FLAG'], errors='coerce')
+                nan_in_made_flag = True # Zakładamy, że mogą być problemy
+                data['SHOT_MADE_FLAG'] = pd.to_numeric(data['SHOT_MADE_FLAG'], errors='coerce')
 
         time_cols = ['PERIOD', 'MINUTES_REMAINING', 'SECONDS_REMAINING']
         missing_time_cols_warning = False
@@ -124,15 +120,14 @@ def load_shooting_data(file_path):
                 # Jeśli kolumny istnieją, ale nie są numeryczne po próbie konwersji
                 nan_in_time_cols_warning = True # Ustaw flagę ostrzeżenia
 
-
         # Sprawdzenie kluczowych kolumn
         key_cols_to_check = ['PLAYER_NAME', 'TEAM_NAME', 'LOC_X', 'LOC_Y', 'SHOT_DISTANCE', 'SEASON_TYPE',
                              'ACTION_TYPE', 'SHOT_TYPE', 'SHOT_ZONE_BASIC', 'SHOT_ZONE_AREA', 'SHOT_ZONE_RANGE', 'SHOT_MADE_FLAG']
         missing_key_cols = [col for col in key_cols_to_check if col not in data.columns]
 
         if 'SHOT_MADE_FLAG' in data.columns:
-             # Upewnij się, że NaN są obsługiwane przed analizą - często usuwane później w funkcjach
-             pass # Już skonwertowane wyżej
+            # Upewnij się, że NaN są obsługiwane przed analizą - często usuwane później w funkcjach
+            pass # Już skonwertowane wyżej
 
         load_status.update({
             "success": True,
@@ -251,8 +246,10 @@ def plot_player_eff_vs_distance(player_data, player_name, bin_width=1, min_attem
         bin_labels_numeric = [(distance_bins[i] + distance_bins[i+1]) / 2 for i in range(len(distance_bins)-1)]
         if not bin_labels_numeric: return None
         distance_data['distance_bin_mid'] = pd.cut(distance_data['SHOT_DISTANCE'], bins=distance_bins, labels=bin_labels_numeric, right=False, include_lowest=True)
+        # Konwertuj etykiety binów na numeryczne, jeśli są kategoryczne
         if pd.api.types.is_categorical_dtype(distance_data['distance_bin_mid']):
-             distance_data['distance_bin_mid'] = pd.to_numeric(distance_data['distance_bin_mid'].astype(str), errors='coerce')
+            distance_data['distance_bin_mid'] = pd.to_numeric(distance_data['distance_bin_mid'].astype(str), errors='coerce')
+
         effectiveness = distance_data.groupby('distance_bin_mid', observed=False)['SHOT_MADE_FLAG'].agg(Made='sum', Attempts='count').reset_index()
         effectiveness = effectiveness[effectiveness['Attempts'] >= min_attempts_per_bin]
         if effectiveness.empty: return None
@@ -262,7 +259,7 @@ def plot_player_eff_vs_distance(player_data, player_name, bin_width=1, min_attem
         fig = px.line(effectiveness, x='distance_bin_mid', y='FG%', title=f'Wpływ odległości rzutu na skuteczność - {player_name}',
                       labels={'distance_bin_mid': 'Środek przedziału odległości (stopy)', 'FG%': 'Skuteczność (%)'}, markers=True, hover_data=['Attempts', 'Made'])
         fig.update_layout(yaxis_range=[-5, 105], xaxis_title='Odległość rzutu (stopy)', yaxis_title='Skuteczność (%)', hovermode="x unified")
-        fig.update_traces(connectgaps=False)
+        fig.update_traces(connectgaps=False) # Nie łącz luk danych
         return fig
     except ValueError as e: return None
     except Exception as e_general: return None
@@ -273,7 +270,12 @@ def plot_shot_chart(entity_data, entity_name, entity_type="Gracz"):
     """Tworzy interaktywną mapę rzutów."""
     required_cols = ['LOC_X', 'LOC_Y', 'SHOT_MADE_FLAG']
     if not all(col in entity_data.columns for col in required_cols): return None
-    plot_data = entity_data[required_cols + [col for col in ['SHOT_DISTANCE', 'SHOT_TYPE', 'ACTION_TYPE', 'SHOT_ZONE_BASIC', 'PERIOD'] if col in entity_data.columns]].copy()
+    # Dodajmy ACTION_TYPE_SIMPLE do hover data jeśli istnieje
+    hover_base = ['SHOT_DISTANCE', 'SHOT_TYPE', 'ACTION_TYPE', 'SHOT_ZONE_BASIC', 'PERIOD']
+    if 'ACTION_TYPE_SIMPLE' in entity_data.columns:
+        hover_base.append('ACTION_TYPE_SIMPLE')
+
+    plot_data = entity_data[required_cols + [col for col in hover_base if col in entity_data.columns]].copy()
     plot_data['LOC_X'] = pd.to_numeric(plot_data['LOC_X'], errors='coerce')
     plot_data['LOC_Y'] = pd.to_numeric(plot_data['LOC_Y'], errors='coerce')
     plot_data['SHOT_MADE_FLAG'] = pd.to_numeric(plot_data['SHOT_MADE_FLAG'], errors='coerce')
@@ -281,8 +283,10 @@ def plot_shot_chart(entity_data, entity_name, entity_type="Gracz"):
     if plot_data.empty: return None
     plot_data['Wynik Rzutu'] = plot_data['SHOT_MADE_FLAG'].map({0: 'Niecelny', 1: 'Celny'})
     color_col, color_map, cat_orders = 'Wynik Rzutu', {'Niecelny': 'red', 'Celny': 'green'}, {"Wynik Rzutu": ['Niecelny', 'Celny']}
-    hover_cols_present = [col for col in ['SHOT_DISTANCE', 'SHOT_TYPE', 'ACTION_TYPE', 'SHOT_ZONE_BASIC', 'PERIOD'] if col in plot_data.columns]
+
+    hover_cols_present = [col for col in hover_base if col in plot_data.columns] # Użyj hover_base
     hover_data_config = {col: True for col in hover_cols_present}
+
     fig = px.scatter(plot_data, x='LOC_X', y='LOC_Y', color=color_col, title=f'Mapa rzutów - {entity_name} ({entity_type})',
                      labels={'LOC_X': 'Pozycja X', 'LOC_Y': 'Pozycja Y', 'Wynik Rzutu': 'Wynik'},
                      hover_data=hover_data_config if hover_data_config else None,
@@ -305,7 +309,7 @@ def calculate_hot_zones(entity_data, min_shots_in_zone=5, n_bins=10):
     if zone_data.empty: return pd.DataFrame()
     x_min, x_max = -250, 250
     y_min, y_max = -47.5, 422.5
-    n_bins = max(2, n_bins)
+    n_bins = max(2, n_bins) # Minimum 2 biny
     try:
         zone_data['zone_x'] = pd.cut(zone_data['LOC_X'], bins=np.linspace(x_min, x_max, n_bins + 1), include_lowest=True, right=True)
         zone_data['zone_y'] = pd.cut(zone_data['LOC_Y'], bins=np.linspace(y_min, y_max, n_bins + 1), include_lowest=True, right=True)
@@ -330,28 +334,37 @@ def plot_hot_zones_heatmap(hot_zones_df, entity_name, entity_type="Gracz", min_s
     if hot_zones_df is None or hot_zones_df.empty or not all(col in hot_zones_df.columns for col in required_cols):
         return None
     plot_df = hot_zones_df[required_cols].copy()
+    # Upewnij się, że kolumny są numeryczne przed operacjami
     for col in required_cols:
         plot_df[col] = pd.to_numeric(plot_df[col], errors='coerce')
-    plot_df = plot_df.dropna()
+    plot_df = plot_df.dropna() # Usuń wiersze z NaN po konwersji
     if plot_df.empty: return None
+
     min_pct, max_pct = plot_df['percentage'].min(), plot_df['percentage'].max()
+    # Zakres kolorów - unikaj sytuacji min > max
     color_range = [max(0, min_pct - 5), min(100, max_pct + 5)] if pd.notna(min_pct) and pd.notna(max_pct) else [0, 100]
-    if color_range[0] >= color_range[1]: color_range = [0, 100]
+    if color_range[0] >= color_range[1]: color_range = [0, 100] # Fallback
+
+    # Skalowanie rozmiaru bąbelków
     max_bubble_size = plot_df["total_shots"].max() if not plot_df["total_shots"].empty else 1
-    size_ref = max(1, max_bubble_size / 50.0)
+    size_ref = max(1, max_bubble_size / 50.0) # Eksperymentalnie dobrany współczynnik skalowania
+
     fig = px.scatter(plot_df, x='x_center', y='y_center', size='total_shots', color='percentage',
-                     color_continuous_scale=px.colors.diverging.RdYlGn,
+                     color_continuous_scale=px.colors.diverging.RdYlGn, # Czerwony-Żółty-Zielony
                      size_max=60, range_color=color_range,
                      title=f'Skuteczność stref rzutowych ({entity_type}: {entity_name}, min. {min_shots_in_zone} rzutów)',
                      labels={'x_center': 'Pozycja X', 'y_center': 'Pozycja Y', 'total_shots': 'Liczba rzutów', 'percentage': 'Skuteczność (%)'},
-                     custom_data=['made_shots', 'total_shots'])
+                     custom_data=['made_shots', 'total_shots']) # Dodaj dane do hovera
+
+    # Ulepszony hovertemplate
     fig.update_traces(
         hovertemplate="<b>Strefa X:</b> %{x:.1f}, <b>Y:</b> %{y:.1f}<br>" +
                       "<b>Liczba rzutów:</b> %{customdata[1]}<br>" +
                       "<b>Trafione:</b> %{customdata[0]}<br>" +
                       "<b>Skuteczność:</b> %{marker.color:.1f}%<extra></extra>",
-        marker=dict(sizeref=size_ref, sizemin=4)
+        marker=dict(sizeref=size_ref, sizemin=4) # Ustaw skalowanie i min. rozmiar
     )
+
     fig = add_court_shapes(fig)
     fig.update_layout(height=600, xaxis_showgrid=False, yaxis_showgrid=False, plot_bgcolor='rgba(255, 255, 255, 1)')
     return fig
@@ -367,17 +380,27 @@ def plot_shot_frequency_heatmap(data, season_name, nbins_x=50, nbins_y=50):
     plot_data['LOC_Y'] = pd.to_numeric(plot_data['LOC_Y'], errors='coerce')
     plot_data = plot_data.dropna(subset=required_cols)
     if plot_data.empty: return None
+
     fig = go.Figure()
     fig.add_trace(go.Histogram2d(
-        x=plot_data['LOC_X'], y=plot_data['LOC_Y'], colorscale='YlOrRd',
-        nbinsx=nbins_x, nbinsy=nbins_y, zauto=True,
-        hovertemplate='<b>Zakres X:</b> %{x}<br><b>Zakres Y:</b> %{y}<br><b>Liczba rzutów:</b> %{z}<extra></extra>',
+        x = plot_data['LOC_X'],
+        y = plot_data['LOC_Y'],
+        colorscale = 'YlOrRd', # Skala kolorów od żółtego do czerwonego
+        nbinsx = nbins_x,
+        nbinsy = nbins_y,
+        zauto = True, # Automatyczne skalowanie osi Z (kolor)
+        hovertemplate = '<b>Zakres X:</b> %{x}<br><b>Zakres Y:</b> %{y}<br><b>Liczba rzutów:</b> %{z}<extra></extra>',
         colorbar=dict(title='Liczba rzutów')
     ))
-    fig = add_court_shapes(fig)
+
+    fig = add_court_shapes(fig) # Dodaj linie boiska
+
     fig.update_layout(
-        title=f'Mapa Częstotliwości Rzutów ({season_name})', xaxis_title="Pozycja X", yaxis_title="Pozycja Y",
-        height=650, xaxis_showgrid=False, yaxis_showgrid=False, plot_bgcolor='rgba(255, 255, 255, 1)'
+        title=f'Mapa Częstotliwości Rzutów ({season_name})',
+        xaxis_title="Pozycja X", yaxis_title="Pozycja Y",
+        height=650,
+        xaxis_showgrid=False, yaxis_showgrid=False,
+        plot_bgcolor='rgba(255, 255, 255, 1)' # Białe tło
     )
     return fig
 
@@ -391,21 +414,30 @@ def plot_player_quarter_eff(entity_data, entity_name, entity_type="Gracz", min_a
     quarter_data['SHOT_MADE_FLAG'] = pd.to_numeric(quarter_data['SHOT_MADE_FLAG'], errors='coerce')
     quarter_data = quarter_data.dropna()
     if quarter_data.empty: return None
-    quarter_data['PERIOD'] = quarter_data['PERIOD'].astype(int)
+    quarter_data['PERIOD'] = quarter_data['PERIOD'].astype(int) # Konwersja na int po usunięciu NaN
+
     quarter_eff = quarter_data.groupby('PERIOD')['SHOT_MADE_FLAG'].agg(['mean', 'count']).reset_index()
-    quarter_eff['mean'] *= 100
-    quarter_eff = quarter_eff[quarter_eff['count'] >= min_attempts]
+    quarter_eff['mean'] *= 100 # Konwersja na procenty
+    quarter_eff = quarter_eff[quarter_eff['count'] >= min_attempts] # Filtrowanie wg minimalnej liczby prób
     if quarter_eff.empty: return None
+
+    # Mapowanie numeru kwarty na czytelną etykietę
     def map_period(p):
         if p <= 4: return f"Kwarta {int(p)}"
         elif p == 5: return "OT 1"
         else: return f"OT {int(p-4)}"
     quarter_eff['Okres Gry'] = quarter_eff['PERIOD'].apply(map_period)
+
+    # Sortowanie wg numeru kwarty/dogrywki
     quarter_eff = quarter_eff.sort_values(by='PERIOD')
-    fig = px.bar(quarter_eff, x='Okres Gry', y='mean', text='mean', title=f'Skuteczność w kwartach/dogrywkach - {entity_name} ({entity_type}, min. {min_attempts} prób)',
-                 labels={'Okres Gry': 'Okres Gry', 'mean': 'Skuteczność (%)'}, hover_data=['count'])
-    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-    fig.update_layout(yaxis_range=[0, 105], uniformtext_minsize=8, uniformtext_mode='hide')
+
+    fig = px.bar(quarter_eff, x='Okres Gry', y='mean', text='mean',
+                 title=f'Skuteczność w kwartach/dogrywkach - {entity_name} ({entity_type}, min. {min_attempts} prób)',
+                 labels={'Okres Gry': 'Okres Gry', 'mean': 'Skuteczność (%)'},
+                 hover_data=['count']) # Pokaż liczbę prób w tooltipie
+
+    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside') # Formatowanie tekstu na słupkach
+    fig.update_layout(yaxis_range=[0, 105], uniformtext_minsize=8, uniformtext_mode='hide') # Poprawki layoutu
     return fig
 
 
@@ -417,15 +449,24 @@ def plot_player_season_trend(entity_data, entity_name, entity_type="Gracz", min_
     trend_data['GAME_DATE'] = pd.to_datetime(trend_data['GAME_DATE'], errors='coerce')
     trend_data['SHOT_MADE_FLAG'] = pd.to_numeric(trend_data['SHOT_MADE_FLAG'], errors='coerce')
     trend_data = trend_data.dropna()
-    if trend_data.empty or len(trend_data) < min_monthly_attempts: return None
+    if trend_data.empty or len(trend_data) < min_monthly_attempts: return None # Sprawdzenie ogólnej liczby danych
+
     trend_data = trend_data.set_index('GAME_DATE')
+    # Resampling do miesięcznej częstotliwości ('ME' - Month End)
     monthly_eff = trend_data.resample('ME')['SHOT_MADE_FLAG'].agg(['mean', 'count']).reset_index()
-    monthly_eff['mean'] *= 100
-    monthly_eff = monthly_eff[monthly_eff['count'] >= min_monthly_attempts]
-    if monthly_eff.empty or len(monthly_eff) < 2: return None
+    monthly_eff['mean'] *= 100 # Skuteczność w procentach
+    monthly_eff = monthly_eff[monthly_eff['count'] >= min_monthly_attempts] # Filtr min. prób miesięcznie
+    if monthly_eff.empty or len(monthly_eff) < 2: return None # Potrzebujemy min. 2 punktów do linii
+
+    # Formatowanie daty na 'YYYY-MM' dla osi X
     monthly_eff['Miesiąc'] = monthly_eff['GAME_DATE'].dt.strftime('%Y-%m')
-    fig = px.line(monthly_eff, x='Miesiąc', y='mean', markers=True, title=f'Miesięczny trend skuteczności - {entity_name} ({entity_type}, min. {min_monthly_attempts} prób/miesiąc)',
-                  labels={'Miesiąc': 'Miesiąc', 'mean': 'Skuteczność (%)'}, hover_data=['count'])
+
+    fig = px.line(monthly_eff, x='Miesiąc', y='mean', markers=True,
+                  title=f'Miesięczny trend skuteczności - {entity_name} ({entity_type}, min. {min_monthly_attempts} prób/miesiąc)',
+                  labels={'Miesiąc': 'Miesiąc', 'mean': 'Skuteczność (%)'},
+                  hover_data=['count']) # Pokaż liczbę prób w tooltipie
+
+    # Dynamiczne dostosowanie zakresu osi Y dla lepszej czytelności
     max_y = 105
     min_y = -5
     if not pd.isna(monthly_eff['mean'].max()): max_y = min(105, monthly_eff['mean'].max() + 10)
@@ -439,22 +480,70 @@ def plot_grouped_effectiveness(entity_data, group_col, entity_name, entity_type=
     """Tworzy wykres skuteczności pogrupowany wg wybranej kolumny."""
     if group_col not in entity_data.columns or 'SHOT_MADE_FLAG' not in entity_data.columns: return None
     grouped_data = entity_data[[group_col, 'SHOT_MADE_FLAG']].copy()
-    grouped_data[group_col] = grouped_data[group_col].astype(str)
+    grouped_data[group_col] = grouped_data[group_col].astype(str).str.strip() # Upewnij się, że to string i usuń białe znaki
     grouped_data['SHOT_MADE_FLAG'] = pd.to_numeric(grouped_data['SHOT_MADE_FLAG'], errors='coerce')
-    grouped_data = grouped_data.dropna()
+    grouped_data = grouped_data.dropna(subset=[group_col, 'SHOT_MADE_FLAG']) # Drop NaN also in group_col
     if grouped_data.empty: return None
+
     grouped_eff = grouped_data.groupby(group_col)['SHOT_MADE_FLAG'].agg(['mean', 'count']).reset_index()
-    grouped_eff['mean'] *= 100
-    grouped_eff = grouped_eff[grouped_eff['count'] >= min_attempts]
+    grouped_eff['mean'] *= 100 # Skuteczność w procentach
+    grouped_eff = grouped_eff[grouped_eff['count'] >= min_attempts] # Filtr min. prób
+
+    # Sortuj wg liczby prób malejąco, aby wybrać top N najczęstszych, a potem sortuj wg kategorii dla spójności
     grouped_eff = grouped_eff.sort_values(by='count', ascending=False).head(top_n)
-    grouped_eff = grouped_eff.sort_values(by=group_col, ascending=True)
+
+    # Specjalne sortowanie dla SHOT_ZONE_BASIC
+    if group_col == 'SHOT_ZONE_BASIC':
+        zone_order_basic = ['Restricted Area', 'In The Paint (Non-RA)', 'Mid-Range', 'Left Corner 3', 'Right Corner 3', 'Above the Break 3', 'Backcourt']
+        # Użyj pd.Categorical do sortowania wg zdefiniowanej kolejności
+        present_zones = [z for z in zone_order_basic if z in grouped_eff[group_col].unique()]
+        grouped_eff[group_col] = pd.Categorical(
+            grouped_eff[group_col],
+            categories=present_zones,
+            ordered=True
+        )
+        grouped_eff = grouped_eff.sort_values(by=group_col) # Sortuj wg kategorii
+    elif group_col == 'ACTION_TYPE_SIMPLE':
+         # Można zdefiniować logiczną kolejność dla uproszczonych typów
+         action_order_simple = ['Dunk', 'Layup', 'Tip Shot', 'Hook Shot', 'Floater', 'Driving Shot', 'Jump Shot', 'Bank Shot', 'Alley Oop', 'Other']
+         present_actions = [a for a in action_order_simple if a in grouped_eff[group_col].unique()]
+         # Dodaj pozostałe nieprzewidziane typy posortowane alfabetycznie
+         other_actions = sorted([a for a in grouped_eff[group_col].unique() if a not in present_actions])
+         final_action_order = present_actions + other_actions
+         grouped_eff[group_col] = pd.Categorical(
+             grouped_eff[group_col],
+             categories=final_action_order,
+             ordered=True
+         )
+         grouped_eff = grouped_eff.sort_values(by=group_col)
+    else:
+        # Inne kategorie sortuj alfabetycznie dla spójności
+        grouped_eff = grouped_eff.sort_values(by=group_col, ascending=True)
+
     if grouped_eff.empty: return None
+
+    # Tworzenie tytułu i etykiet osi
     axis_label = group_col.replace('_',' ').title()
+    chart_title = f'Skuteczność wg {axis_label} - {entity_name} ({entity_type})'
+    if top_n < grouped_eff[group_col].nunique(): # Dostosuj tytuł jeśli pokazano tylko Top N
+         chart_title += f' (Top {top_n} najczęstszych, min. {min_attempts} prób)'
+    else:
+         chart_title += f' (min. {min_attempts} prób)'
+
+
     fig = px.bar(grouped_eff, x=group_col, y='mean', text='mean',
-                 title=f'Skuteczność wg {axis_label} - {entity_name} ({entity_type}) (Top {top_n} najczęstszych, min. {min_attempts} prób)',
-                 labels={group_col: axis_label, 'mean': 'Skuteczność (%)'}, hover_data=['count'])
+                 title=chart_title,
+                 labels={group_col: axis_label, 'mean': 'Skuteczność (%)'},
+                 hover_data=['count']) # Pokaż liczbę prób w tooltipie
+
     fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
     fig.update_layout(yaxis_range=[0, 105], uniformtext_minsize=8, uniformtext_mode='hide', xaxis_title=axis_label)
+
+    # Upewnij się, że kolejność na osi X odpowiada sortowaniu
+    if group_col in ['SHOT_ZONE_BASIC', 'ACTION_TYPE_SIMPLE']:
+         category_order = grouped_eff[group_col].cat.categories.tolist() # Pobierz kolejność z Categorical
+         fig.update_layout(xaxis={'categoryorder':'array', 'categoryarray': category_order})
+
     return fig
 
 
@@ -469,28 +558,37 @@ def plot_comparison_eff_distance(compare_data, selected_players, bin_width=3, mi
     compare_data_eff = compare_data_eff.dropna(subset=required_cols)
     if compare_data_eff.empty: return None
     if not pd.api.types.is_numeric_dtype(compare_data_eff['SHOT_DISTANCE']): return None
+
     max_dist = compare_data_eff['SHOT_DISTANCE'].max()
     if pd.isna(max_dist) or max_dist <= 0: return None
+
     try:
         max_dist_rounded = np.ceil(max_dist)
         distance_bins = np.arange(0, max_dist_rounded + bin_width, bin_width)
         bin_labels_numeric = [(distance_bins[i] + distance_bins[i+1]) / 2 for i in range(len(distance_bins)-1)]
         if not bin_labels_numeric: return None
+
         compare_data_eff['distance_bin_mid'] = pd.cut(compare_data_eff['SHOT_DISTANCE'], bins=distance_bins, labels=bin_labels_numeric, right=False, include_lowest=True)
         if pd.api.types.is_categorical_dtype(compare_data_eff['distance_bin_mid']):
             compare_data_eff['distance_bin_mid'] = pd.to_numeric(compare_data_eff['distance_bin_mid'].astype(str), errors='coerce')
+
         effectiveness = compare_data_eff.groupby(['PLAYER_NAME', 'distance_bin_mid'], observed=False)['SHOT_MADE_FLAG'].agg(['mean', 'count']).reset_index()
-        effectiveness['mean'] *= 100
-        effectiveness = effectiveness[effectiveness['count'] >= min_attempts_per_bin]
-        effectiveness = effectiveness.dropna(subset=['distance_bin_mid'])
+        effectiveness['mean'] *= 100 # Procenty
+        effectiveness = effectiveness[effectiveness['count'] >= min_attempts_per_bin] # Filtr min. prób
+        effectiveness = effectiveness.dropna(subset=['distance_bin_mid']) # Usuń NaN w binach
         if effectiveness.empty: return None
-        effectiveness = effectiveness.sort_values(by=['PLAYER_NAME', 'distance_bin_mid'])
+
+        effectiveness = effectiveness.sort_values(by=['PLAYER_NAME', 'distance_bin_mid']) # Sortuj
+
+        # Dynamiczny zakres osi Y
         max_eff_val = effectiveness['mean'].max()
         yaxis_range = [0, min(105, max_eff_val + 10 if not pd.isna(max_eff_val) else 105)]
+
         fig = px.line(effectiveness, x='distance_bin_mid', y='mean', color='PLAYER_NAME',
                       title=f'Porównanie skuteczności vs odległości (min. {min_attempts_per_bin} prób w przedziale {bin_width} stóp)',
                       labels={'distance_bin_mid': 'Odległość (stopy)', 'mean': 'Skuteczność (%)', 'PLAYER_NAME': 'Gracz'},
                       markers=True, hover_data=['count'])
+
         fig.update_layout(yaxis_range=yaxis_range, hovermode="x unified")
         return fig
     except Exception as e: return None
@@ -506,21 +604,31 @@ def plot_comparison_eff_by_zone(compare_data, selected_players, min_shots_per_zo
     zone_eff_data['SHOT_ZONE_BASIC'] = zone_eff_data['SHOT_ZONE_BASIC'].astype(str).str.strip()
     zone_eff_data = zone_eff_data.dropna(subset=required_cols)
     if zone_eff_data.empty: return None
+
     zone_stats = zone_eff_data.groupby(['PLAYER_NAME', 'SHOT_ZONE_BASIC'], observed=False)['SHOT_MADE_FLAG'].agg(Made='sum', Attempts='count').reset_index()
-    zone_stats_filtered = zone_stats[zone_stats['Attempts'] >= min_shots_per_zone]
+    zone_stats_filtered = zone_stats[zone_stats['Attempts'] >= min_shots_per_zone] # Filtr min. prób
     if zone_stats_filtered.empty: return None
-    zone_stats_filtered['FG%'] = (zone_stats_filtered['Made'] / zone_stats_filtered['Attempts']) * 100
+
+    zone_stats_filtered['FG%'] = (zone_stats_filtered['Made'] / zone_stats_filtered['Attempts']) * 100 # Procenty
+
+    # Definiowanie kolejności stref jak w analizie pojedynczego gracza
     zone_order_ideal = ['Restricted Area', 'In The Paint (Non-RA)', 'Mid-Range', 'Left Corner 3', 'Right Corner 3', 'Above the Break 3', 'Backcourt']
     actual_zones_in_data = zone_stats_filtered['SHOT_ZONE_BASIC'].unique()
+    # Zachowaj tylko istniejące strefy w idealnej kolejności, dodaj resztę posortowaną
     zone_order = [zone for zone in zone_order_ideal if zone in actual_zones_in_data]
     zone_order += sorted([zone for zone in actual_zones_in_data if zone not in zone_order_ideal])
-    if not zone_order: return None
+    if not zone_order: return None # Jeśli nie ma żadnych stref
+
     zone_stats_plot = zone_stats_filtered[zone_stats_filtered['SHOT_ZONE_BASIC'].isin(zone_order)].copy()
     if zone_stats_plot.empty: return None
+
     fig = px.bar(zone_stats_plot, x='SHOT_ZONE_BASIC', y='FG%', color='PLAYER_NAME', barmode='group',
                  title=f'Porównanie skuteczności (FG%) wg Strefy Rzutowej (min. {min_shots_per_zone} prób)',
                  labels={'SHOT_ZONE_BASIC': 'Strefa Rzutowa', 'FG%': 'Skuteczność (%)', 'PLAYER_NAME': 'Gracz'},
-                 hover_data=['Attempts', 'Made'], category_orders={'SHOT_ZONE_BASIC': zone_order}, text='FG%')
+                 hover_data=['Attempts', 'Made'],
+                 category_orders={'SHOT_ZONE_BASIC': zone_order}, # Użyj zdefiniowanej kolejności
+                 text='FG%')
+
     fig.update_layout(yaxis_range=[0, 105], xaxis={'categoryorder':'array', 'categoryarray':zone_order}, legend_title_text='Gracze')
     fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
     return fig
@@ -536,6 +644,7 @@ def calculate_top_performers(data, group_by_col, min_total_shots, min_2pt_shots,
     valid_data = valid_data.dropna(subset=[group_by_col, 'SHOT_MADE_FLAG'])
     if valid_data.empty: return None, None, None
 
+    # Ranking Ogólny (FG%)
     overall_stats = valid_data.groupby(group_by_col)['SHOT_MADE_FLAG'].agg(Made='sum', Attempts='count').reset_index()
     overall_stats = overall_stats[overall_stats['Attempts'] >= min_total_shots]
     top_overall = pd.DataFrame()
@@ -544,24 +653,26 @@ def calculate_top_performers(data, group_by_col, min_total_shots, min_2pt_shots,
         top_overall = overall_stats.sort_values(by=['FG%', 'Attempts'], ascending=[False, False]).head(top_n)
         col_name = group_by_col.replace('_',' ').title()
         top_overall = top_overall.rename(columns={group_by_col: col_name, 'Attempts': 'Próby'})
-        top_overall = top_overall[[col_name, 'FG%', 'Próby']]
+        top_overall = top_overall[[col_name, 'FG%', 'Próby']] # Zachowaj tylko potrzebne kolumny
 
+    # Ranking 2PT%
     shot_type_2pt = '2PT Field Goal'
     top_2pt = pd.DataFrame()
     if 'SHOT_TYPE' in valid_data.columns:
-         valid_data['SHOT_TYPE'] = valid_data['SHOT_TYPE'].astype(str).str.strip()
-         if shot_type_2pt in valid_data['SHOT_TYPE'].unique():
-             data_2pt = valid_data[valid_data['SHOT_TYPE'] == shot_type_2pt]
-             if not data_2pt.empty:
-                 stats_2pt = data_2pt.groupby(group_by_col)['SHOT_MADE_FLAG'].agg(Made_2PT='sum', Attempts_2PT='count').reset_index()
-                 stats_2pt = stats_2pt[stats_2pt['Attempts_2PT'] >= min_2pt_shots]
-                 if not stats_2pt.empty:
-                     stats_2pt['2PT FG%'] = (stats_2pt['Made_2PT'] / stats_2pt['Attempts_2PT']) * 100
-                     top_2pt = stats_2pt.sort_values(by=['2PT FG%', 'Attempts_2PT'], ascending=[False, False]).head(top_n)
-                     col_name = group_by_col.replace('_',' ').title()
-                     top_2pt = top_2pt.rename(columns={group_by_col: col_name, 'Attempts_2PT': 'Próby 2PT'})
-                     top_2pt = top_2pt[[col_name, '2PT FG%', 'Próby 2PT']]
+        valid_data['SHOT_TYPE'] = valid_data['SHOT_TYPE'].astype(str).str.strip()
+        if shot_type_2pt in valid_data['SHOT_TYPE'].unique():
+            data_2pt = valid_data[valid_data['SHOT_TYPE'] == shot_type_2pt]
+            if not data_2pt.empty:
+                stats_2pt = data_2pt.groupby(group_by_col)['SHOT_MADE_FLAG'].agg(Made_2PT='sum', Attempts_2PT='count').reset_index()
+                stats_2pt = stats_2pt[stats_2pt['Attempts_2PT'] >= min_2pt_shots]
+                if not stats_2pt.empty:
+                    stats_2pt['2PT FG%'] = (stats_2pt['Made_2PT'] / stats_2pt['Attempts_2PT']) * 100
+                    top_2pt = stats_2pt.sort_values(by=['2PT FG%', 'Attempts_2PT'], ascending=[False, False]).head(top_n)
+                    col_name = group_by_col.replace('_',' ').title()
+                    top_2pt = top_2pt.rename(columns={group_by_col: col_name, 'Attempts_2PT': 'Próby 2PT'})
+                    top_2pt = top_2pt[[col_name, '2PT FG%', 'Próby 2PT']]
 
+    # Ranking 3PT%
     shot_type_3pt = '3PT Field Goal'
     top_3pt = pd.DataFrame()
     if 'SHOT_TYPE' in valid_data.columns:
@@ -576,6 +687,7 @@ def calculate_top_performers(data, group_by_col, min_total_shots, min_2pt_shots,
                     col_name = group_by_col.replace('_',' ').title()
                     top_3pt = top_3pt.rename(columns={group_by_col: col_name, 'Attempts_3PT': 'Próby 3PT'})
                     top_3pt = top_3pt[[col_name, '3PT FG%', 'Próby 3PT']]
+
     return top_overall, top_2pt, top_3pt
 
 def simplify_action_type(df):
@@ -602,16 +714,16 @@ def simplify_action_type(df):
     # Definiujemy warunki i odpowiadające im kategorie
     # Kolejność ma znaczenie - od najbardziej specyficznych/ważnych
     conditions = [
-        action_col.str.contains('dunk', na=False),                            # 1. Dunks
-        action_col.str.contains('layup', na=False),                           # 2. Layups (po dunkach)
-        # 3. Jump Shots (szeroka kategoria)
+        action_col.str.contains('dunk', na=False),                       # 1. Dunks
+        action_col.str.contains('layup', na=False),                      # 2. Layups (po dunkach)
+        # 3. Jump Shots (szeroka kategoria, łapie też pullup, step back, fadeaway)
         action_col.str.contains('jump shot|pullup|step back|fadeaway', na=False, regex=True),
-        action_col.str.contains('hook shot', na=False),                       # 4. Hook Shots
-        action_col.str.contains('tip|putback', na=False, regex=True),         # 5. Tip-ins / Putbacks
-        action_col.str.contains('driving', na=False),                         # 6. Driving (inne niż layup/dunk)
-        action_col.str.contains('floating|floater', na=False, regex=True),    # 7. Floaters
-        action_col.str.contains('alley oop', na=False),                       # 8. Alley Oops (jeśli nie są dunk/layup)
-        action_col.str.contains('bank shot', na=False)                        # 9. Bank Shots (jeśli nie pasują wyżej)
+        action_col.str.contains('hook shot', na=False),                  # 4. Hook Shots
+        action_col.str.contains('tip|putback', na=False, regex=True),    # 5. Tip-ins / Putbacks
+        action_col.str.contains('driving', na=False),                    # 6. Driving (inne niż layup/dunk/jump) - musi być po jump shot
+        action_col.str.contains('floating|floater', na=False, regex=True),# 7. Floaters
+        action_col.str.contains('alley oop', na=False),                  # 8. Alley Oops (jeśli nie są dunk/layup)
+        action_col.str.contains('bank shot', na=False)                   # 9. Bank Shots (jeśli nie pasują wyżej)
         # Można dodać więcej warunków w razie potrzeby
     ]
 
@@ -621,7 +733,7 @@ def simplify_action_type(df):
         'Jump Shot',
         'Hook Shot',
         'Tip Shot',
-        'Driving Shot', # Kategoria dla "driving X shot" jeśli nie jest to layup/dunk
+        'Driving Shot', # Kategoria dla "driving X shot" jeśli nie jest to layup/dunk/jump
         'Floater',
         'Alley Oop',
         'Bank Shot'
@@ -648,7 +760,7 @@ shooting_data, load_status = load_shooting_data(CSV_FILE_PATH)
 
 # --- Integracja Uproszczenia ACTION_TYPE ---
 if load_status.get("success", False) and not shooting_data.empty:
-    # Wywołaj funkcję upraszczającą TUTAJ
+    # Wywołaj funkcję upraszczającą TUTAJ, przed filtrowaniem sezonu
     shooting_data = simplify_action_type(shooting_data) # Dodaje kolumnę 'ACTION_TYPE_SIMPLE'
     # Komunikat sukcesu przeniesiony niżej, aby uwzględnić przetworzenie
 # --- Koniec Integracji ---
@@ -660,55 +772,61 @@ st.sidebar.header("Opcje Filtrowania i Analizy")
 # Główna część aplikacji renderowana tylko jeśli dane są wczytane
 if load_status.get("success", False) and not shooting_data.empty:
 
-    # Komunikat o sukcesie po przetworzeniu (jeśli było)
-    st.success(f"Wczytano i przetworzono dane z {CSV_FILE_PATH}. Wymiary: {load_status.get('shape')}. " +
-               ("Dodano 'ACTION_TYPE_SIMPLE'." if 'ACTION_TYPE_SIMPLE' in shooting_data.columns else ""))
+    # Komunikat o sukcesie po wczytaniu i potencjalnym przetworzeniu
+    success_msg = f"Wczytano i przetworzono dane z {CSV_FILE_PATH}. Wymiary: {load_status.get('shape')}."
+    if 'ACTION_TYPE_SIMPLE' in shooting_data.columns:
+         success_msg += " Dodano uproszczone typy akcji ('ACTION_TYPE_SIMPLE')."
+    st.success(success_msg)
 
+    # Wyświetl ostrzeżenia z procesu ładowania
     if load_status.get("missing_time_cols"): st.warning("Brak kolumn czasowych. Nie można było utworzyć 'GAME_TIME_SEC' ani 'QUARTER_TYPE'.")
-    if load_status.get("nan_in_time_cols"): st.warning("W kolumnach czasowych znaleziono wartości nienumeryczne (NaN).")
-    if load_status.get("nan_in_made_flag"): st.warning("W kolumnie SHOT_MADE_FLAG znaleziono wartości niejednoznaczne (NaN).")
-    if load_status.get("missing_key_cols"): st.warning(f"Brakujące kluczowe kolumny: {', '.join(load_status['missing_key_cols'])}.")
+    if load_status.get("nan_in_time_cols"): st.warning("W kolumnach czasowych znaleziono wartości nienumeryczne (NaN) po próbie konwersji.")
+    if load_status.get("nan_in_made_flag"): st.warning("W kolumnie SHOT_MADE_FLAG znaleziono wartości niejednoznaczne lub nienumeryczne (NaN) po próbie konwersji.")
+    if load_status.get("missing_key_cols"): st.warning(f"Brakujące kluczowe kolumny do pełnej analizy: {', '.join(load_status['missing_key_cols'])}.")
 
     # Sidebar Filters
+    # Filtr Sezonu
     available_season_types = ['Wszystko'] + shooting_data['SEASON_TYPE'].dropna().unique().tolist() if 'SEASON_TYPE' in shooting_data.columns else ['Wszystko']
     selected_season_type = st.sidebar.selectbox(
         "Wybierz typ sezonu:", options=available_season_types, index=0, key='sidebar_season_select'
     )
+    # Filtruj dane GŁÓWNE na podstawie wybranego sezonu
     if selected_season_type != 'Wszystko' and 'SEASON_TYPE' in shooting_data.columns:
         # Filtrowanie odbywa się na danych już z ACTION_TYPE_SIMPLE
         filtered_data = shooting_data[shooting_data['SEASON_TYPE'] == selected_season_type].copy()
     else:
-        filtered_data = shooting_data.copy()
+        filtered_data = shooting_data.copy() # Użyj wszystkich danych (z ACTION_TYPE_SIMPLE)
     st.sidebar.write(f"Wybrano: {selected_season_type} ({len(filtered_data)} rzutów)")
 
-    # Player Selection
+    # Player Selection (na podstawie przefiltrowanych danych sezonu)
     available_players = sorted(filtered_data['PLAYER_NAME'].dropna().unique()) if 'PLAYER_NAME' in filtered_data.columns else []
     default_player = "LeBron James"
     default_player_index = 0
     if available_players:
         try: default_player_index = available_players.index(default_player)
-        except ValueError: default_player_index = 0
+        except ValueError: default_player_index = 0 # Jeśli LeBrona nie ma, weź pierwszego
     selected_player = st.sidebar.selectbox(
         "Gracz do analizy/modelowania:", options=available_players, index=default_player_index,
         key='sidebar_player_select', disabled=not available_players,
         help="Wybierz gracza do szczegółowej analizy lub oceny modeli."
     )
 
-    # Team Selection
+    # Team Selection (na podstawie przefiltrowanych danych sezonu)
     available_teams = sorted(filtered_data['TEAM_NAME'].dropna().unique()) if 'TEAM_NAME' in filtered_data.columns else []
     default_team = "Los Angeles Lakers"
     default_team_index = 0
     if available_teams:
         try: default_team_index = available_teams.index(default_team)
-        except ValueError: default_team_index = 0
+        except ValueError: default_team_index = 0 # Jeśli Lakersów nie ma, weź pierwszy zespół
     selected_team = st.sidebar.selectbox(
         "Drużyna do analizy:", options=available_teams, index=default_team_index,
         key='sidebar_team_select', disabled=not available_teams,
         help="Wybierz drużynę do analizy zespołowej."
     )
 
-    # Player Comparison Selection
-    default_compare_players_req = ["LeBron James", "Stephen Curry"]
+    # Player Comparison Selection (na podstawie przefiltrowanych danych sezonu)
+    default_compare_players_req = ["LeBron James", "Stephen Curry"] # Przykładowi gracze
+    # Weź tylko tych, którzy są dostępni w przefiltrowanych danych
     default_compare_players_available = [p for p in default_compare_players_req if p in available_players]
     selected_players_compare = st.sidebar.multiselect(
         "Gracze do porównania (2-5):", options=available_players, default=default_compare_players_available,
@@ -718,135 +836,165 @@ if load_status.get("success", False) and not shooting_data.empty:
 
     # === Zaktualizowana lista opcji zakładek ===
     tab_options = [
-        "📈 Rankingi Skuteczności",
+        "📊 Rankingi Skuteczności",
         "⛹️ Analiza Gracza",
         "🆚 Porównanie Graczy",
         "🏀 Analiza Zespołowa",
         "🎯 Ocena Modelu (KNN)",
         "🎯 Ocena Modelu (XGBoost)",
-        "🧪 Porównanie Modeli (KNN vs XGBoost)"
+        "📊 Porównanie Modeli (KNN vs XGBoost)"
     ]
 
+    # Upewnij się, że domyślny widok jest poprawny
     if st.session_state.active_view not in tab_options:
         st.session_state.active_view = tab_options[0]
 
+    # Wybór widoku za pomocą st.radio
     current_index = tab_options.index(st.session_state.active_view)
     st.session_state.active_view = st.radio(
         "Wybierz widok:", options=tab_options, index=current_index,
         key='main_view_selector', horizontal=True, label_visibility="collapsed"
     )
-    st.markdown("---")
+    st.markdown("---") # Separator
 
-    # === Poszczególne Widoki ===
+    # === Poszczególne Widoki / Zakładki ===
 
     if st.session_state.active_view == "📊 Rankingi Skuteczności":
-        # --- Prefiks dla kluczy w tym widoku: rank_ ---
+        # --- Prefiks dla kluczy widgetów w tym widoku: rank_ ---
         st.header(f"Analiza Ogólna Sezonu: {selected_season_type}")
 
         # --- Obliczanie i Wyświetlanie Średnich Ligowych ---
-        # Kod wstawiony tutaj zgodnie z poprzednią odpowiedzią
-        st.markdown("---") # Dodajemy separator dla lepszej czytelności
+        st.markdown("---")
         st.subheader("Średnie Skuteczności w Lidze")
-
-        league_avg_2pt = "N/A"
-        league_avg_3pt = "N/A"
-        attempts_2pt_league = 0
-        attempts_3pt_league = 0
-        made_2pt_league = 0
-        made_3pt_league = 0
-
-        # Sprawdzamy, czy potrzebne kolumny istnieją w przefiltrowanych danych
+        league_avg_2pt = "N/A"; league_avg_3pt = "N/A"
+        attempts_2pt_league = 0; attempts_3pt_league = 0
+        made_2pt_league = 0; made_3pt_league = 0
         if 'SHOT_TYPE' in filtered_data.columns and 'SHOT_MADE_FLAG' in filtered_data.columns:
-            # Tworzymy kopię do obliczeń, aby uniknąć SettingWithCopyWarning
             calc_data = filtered_data[['SHOT_TYPE', 'SHOT_MADE_FLAG']].copy()
-            # Upewniamy się, że SHOT_MADE_FLAG jest numeryczne i obsługujemy NaN
             calc_data['SHOT_MADE_FLAG'] = pd.to_numeric(calc_data['SHOT_MADE_FLAG'], errors='coerce')
             calc_data.dropna(subset=['SHOT_MADE_FLAG'], inplace=True)
-            # Po usunięciu NaN można bezpiecznie konwertować na int
             if not calc_data.empty:
-                 calc_data['SHOT_MADE_FLAG'] = calc_data['SHOT_MADE_FLAG'].astype(int)
-
-                 # Obliczenia dla rzutów za 2 punkty
-                 data_2pt = calc_data[calc_data['SHOT_TYPE'] == '2PT Field Goal']
-                 attempts_2pt_league = len(data_2pt)
-                 if attempts_2pt_league > 0:
-                     made_2pt_league = data_2pt['SHOT_MADE_FLAG'].sum()
-                     league_avg_2pt = (made_2pt_league / attempts_2pt_league) * 100
-
-                 # Obliczenia dla rzutów za 3 punkty
-                 data_3pt = calc_data[calc_data['SHOT_TYPE'] == '3PT Field Goal']
-                 attempts_3pt_league = len(data_3pt)
-                 if attempts_3pt_league > 0:
-                     made_3pt_league = data_3pt['SHOT_MADE_FLAG'].sum()
-                     league_avg_3pt = (made_3pt_league / attempts_3pt_league) * 100
-            else:
-                 # Ten komunikat może pojawić się, jeśli wszystkie SHOT_MADE_FLAG były NaN
-                 st.caption("Brak ważnych danych do obliczenia średnich ligowych.")
-
-        # Wyświetlanie wyników za pomocą st.metric w dwóch kolumnach
+                calc_data['SHOT_MADE_FLAG'] = calc_data['SHOT_MADE_FLAG'].astype(int)
+                # Obliczenia dla 2PT
+                data_2pt = calc_data[calc_data['SHOT_TYPE'] == '2PT Field Goal']
+                attempts_2pt_league = len(data_2pt)
+                if attempts_2pt_league > 0:
+                    made_2pt_league = data_2pt['SHOT_MADE_FLAG'].sum()
+                    league_avg_2pt = (made_2pt_league / attempts_2pt_league) * 100
+                # Obliczenia dla 3PT
+                data_3pt = calc_data[calc_data['SHOT_TYPE'] == '3PT Field Goal']
+                attempts_3pt_league = len(data_3pt)
+                if attempts_3pt_league > 0:
+                    made_3pt_league = data_3pt['SHOT_MADE_FLAG'].sum()
+                    league_avg_3pt = (made_3pt_league / attempts_3pt_league) * 100
+            else: st.caption("Brak ważnych danych do obliczenia średnich ligowych.")
+        # Wyświetlanie metryk
         col_avg1, col_avg2 = st.columns(2)
         with col_avg1:
-            st.metric(
-                label=f"Średnia Skuteczność 2PT (Liga)",
-                value=f"{league_avg_2pt:.1f}%" if isinstance(league_avg_2pt, (float, int)) else "Brak danych",
-                help=f"Obliczono na podstawie {attempts_2pt_league:,} rzutów za 2 punkty ({made_2pt_league:,} trafionych) w wybranym sezonie ({selected_season_type}).".replace(',', ' ') # Formatowanie z separatorem tysięcy
-            )
+            st.metric(label=f"Średnia Skuteczność 2PT (Liga)",
+                      value=f"{league_avg_2pt:.1f}%" if isinstance(league_avg_2pt, (float, int)) else "Brak danych",
+                      help=f"Obliczono na podstawie {attempts_2pt_league:,} rzutów ({made_2pt_league:,} trafionych) w {selected_season_type}.".replace(',', ' '))
         with col_avg2:
-            st.metric(
-                label=f"Średnia Skuteczność 3PT (Liga)",
-                value=f"{league_avg_3pt:.1f}%" if isinstance(league_avg_3pt, (float, int)) else "Brak danych",
-                help=f"Obliczono na podstawie {attempts_3pt_league:,} rzutów za 3 punkty ({made_3pt_league:,} trafionych) w wybranym sezonie ({selected_season_type}).".replace(',', ' ') # Formatowanie z separatorem tysięcy
-            )
-        st.markdown("---") # Dodajemy separator po metrykach
+            st.metric(label=f"Średnia Skuteczność 3PT (Liga)",
+                      value=f"{league_avg_3pt:.1f}%" if isinstance(league_avg_3pt, (float, int)) else "Brak danych",
+                      help=f"Obliczono na podstawie {attempts_3pt_league:,} rzutów ({made_3pt_league:,} trafionych) w {selected_season_type}.".replace(',', ' '))
+        st.markdown("---")
         # --- Koniec Sekcji Średnich Ligowych ---
 
 
         st.subheader("Ogólne Rozkłady Rzutów")
         st.caption(f"Dane dla: {selected_season_type}")
-        c1_dist, c2_dist = st.columns(2)
 
-        with c1_dist: # Rozkład typów rzutów
+        # --- Definicja Wyboru Typu Akcji PRZED Kolumnami ---
+        action_type_col_rank = 'ACTION_TYPE' # Domyślnie oryginalne
+        action_choice = 'Oryginalne'
+        if 'ACTION_TYPE_SIMPLE' in filtered_data.columns:
+            action_choice_options = ('Oryginalne', 'Uproszczone')
+            default_action_index = 1 # Domyślnie uproszczone, jeśli dostępne
+            action_choice = st.radio(
+                "Pokaż typy akcji:",
+                action_choice_options,
+                key='rank_action_type_choice', horizontal=True, index=default_action_index
+            )
+            if action_choice == 'Uproszczone':
+                action_type_col_rank = 'ACTION_TYPE_SIMPLE'
+        # --- Koniec Definicji Wyboru ---
+
+
+        # --- Layout: Dwa Wiersze po Dwie Kolumny ---
+        # --- Wiersz 1 ---
+        c1_top, c2_top = st.columns(2)
+
+        with c1_top: # Lewa Górna: Rozkład Typów Rzutów (Pie)
+            st.markdown("###### Rozkład Typów Rzutów")
             if 'SHOT_TYPE' in filtered_data.columns and not filtered_data['SHOT_TYPE'].isnull().all():
                 shot_type_counts = filtered_data['SHOT_TYPE'].dropna().value_counts().reset_index()
                 if not shot_type_counts.empty:
-                    fig_type = px.pie(shot_type_counts, names='SHOT_TYPE', values='count', title='Rozkład Typów Rzutów')
-                    fig_type.update_layout(legend_title_text='Typ Rzutu')
+                    fig_type = px.pie(shot_type_counts, names='SHOT_TYPE', values='count', hole=0.3)
+                    fig_type.update_layout(legend_title_text='Typ Rzutu', height=350, margin=dict(t=20, b=0, l=0, r=0))
                     st.plotly_chart(fig_type, use_container_width=True)
                 else: st.caption("Brak danych dla typów rzutów.")
             else: st.caption("Brak kolumny 'SHOT_TYPE'.")
 
-        with c2_dist: # Typy akcji (częstotliwość i skuteczność)
-            # Można dać wybór między ACTION_TYPE i ACTION_TYPE_SIMPLE
-            action_type_col_rank = 'ACTION_TYPE' # Domyślnie oryginalna kolumna
-            if 'ACTION_TYPE_SIMPLE' in filtered_data.columns:
-                 action_choice = st.radio(
-                     "Pokaż typy akcji:",
-                     ('Oryginalne', 'Uproszczone'),
-                     key='rank_action_type_choice', horizontal=True, index=1 # Domyślnie uproszczone
-                 )
-                 if action_choice == 'Uproszczone':
-                     action_type_col_rank = 'ACTION_TYPE_SIMPLE'
-
-
+        with c2_top: # Prawa Górna: Najczęstsze Typy Akcji (Bar)
+            st.markdown(f"###### Najczęstsze Typy Akcji ({action_choice})")
             if action_type_col_rank in filtered_data.columns and not filtered_data[action_type_col_rank].isnull().all():
                 action_type_counts = filtered_data[action_type_col_rank].dropna().value_counts().head(15).reset_index()
                 if not action_type_counts.empty:
-                    # Zmieniono y na action_type_col_rank
                     fig_action_freq = px.bar(action_type_counts, y=action_type_col_rank, x='count', orientation='h',
-                                             title=f'Najczęstsze Typy Akcji ({action_choice}) (Top 15)',
-                                             labels={'count':'Liczba Rzutów', action_type_col_rank:''})
-                    fig_action_freq.update_layout(yaxis={'categoryorder':'total ascending'}, height=400)
+                                             labels={'count':'Liczba Rzutów', action_type_col_rank:''}, text='count')
+                    fig_action_freq.update_layout(yaxis={'categoryorder':'total ascending'}, height=350, margin=dict(t=20, b=0, l=0, r=0))
+                    fig_action_freq.update_traces(texttemplate='%{text:,}'.replace(',', ' '), textposition='outside')
                     st.plotly_chart(fig_action_freq, use_container_width=True)
                 else: st.caption(f"Brak danych dla typów akcji ('{action_type_col_rank}').")
             else: st.caption(f"Brak kolumny '{action_type_col_rank}'.")
 
-            st.markdown("---")
-            st.markdown("###### Najefektywniejsze Typy Akcji")
-            # Używamy tej samej wybranej kolumny (action_type_col_rank)
+        st.markdown("<br>", unsafe_allow_html=True) # Mały odstęp
+
+        # --- Wiersz 2 ---
+        c1_bottom, c2_bottom = st.columns(2)
+
+        with c1_bottom: # Lewa Dolna: Rozkład Rzutów wg Strefy (Bar)
+            st.markdown("###### Rozkład Rzutów wg Strefy")
+            if 'SHOT_ZONE_BASIC' in filtered_data.columns and not filtered_data['SHOT_ZONE_BASIC'].isnull().all():
+                zone_basic_counts = filtered_data['SHOT_ZONE_BASIC'].dropna().value_counts().reset_index()
+                if not zone_basic_counts.empty:
+                    zone_order_basic = ['Restricted Area', 'In The Paint (Non-RA)', 'Mid-Range', 'Left Corner 3', 'Right Corner 3', 'Above the Break 3', 'Backcourt']
+                    # Sortowanie wg zdefiniowanej kolejności
+                    zone_basic_counts['SHOT_ZONE_BASIC'] = pd.Categorical(
+                        zone_basic_counts['SHOT_ZONE_BASIC'],
+                        categories=[z for z in zone_order_basic if z in zone_basic_counts['SHOT_ZONE_BASIC'].unique()],
+                        ordered=True
+                    )
+                    zone_basic_counts = zone_basic_counts.sort_values('SHOT_ZONE_BASIC')
+
+                    fig_zone_basic_dist = px.bar(
+                        zone_basic_counts, x='SHOT_ZONE_BASIC', y='count',
+                        labels={'SHOT_ZONE_BASIC': 'Strefa Rzutowa (Podstawowa)', 'count': 'Liczba Rzutów'},
+                        text='count'
+                    )
+                    # Poprawka widoczności etykiety: auto + zwiększenie zakresu Y
+                    fig_zone_basic_dist.update_traces(texttemplate='%{text:,}'.replace(',', ' '), textposition='auto')
+                    fig_zone_basic_dist.update_layout(
+                        xaxis_title=None, yaxis_title="Liczba Rzutów",
+                        height=400, margin=dict(t=0, b=0, l=0, r=0)
+                    )
+                    # Dynamiczne ustawienie zakresu osi Y dla lepszej widoczności etykiet
+                    max_y_val = zone_basic_counts['count'].max()
+                    if pd.notna(max_y_val):
+                        fig_zone_basic_dist.update_layout(yaxis_range=[0, max_y_val * 1.1]) # Margines 10%
+
+                    st.plotly_chart(fig_zone_basic_dist, use_container_width=True)
+                else: st.caption("Brak danych dla rozkładu stref podstawowych.")
+            else: st.caption("Brak kolumny 'SHOT_ZONE_BASIC'.")
+
+
+        with c2_bottom: # Prawa Dolna: Najefektywniejsze Typy Akcji (Bar)
+            st.markdown(f"###### Najefektywniejsze Typy Akcji ({action_choice})")
             if action_type_col_rank in filtered_data.columns and 'SHOT_MADE_FLAG' in filtered_data.columns:
-                min_attempts_eff_action = st.number_input(
+                min_attempts_eff_action_b = st.number_input(
                     f"Min. prób dla rankingu skuteczności akcji ({action_choice}):", min_value=5, value=10, step=1,
-                    key=f'rank_min_attempts_eff_action_{action_type_col_rank}', # Unikalny klucz
+                    key=f'rank_min_attempts_eff_action_{action_type_col_rank}_bottom', # Unikalny klucz
                     help="Minimalna liczba rzutów danego typu akcji w rankingu."
                 )
                 action_eff_data = filtered_data[[action_type_col_rank, 'SHOT_MADE_FLAG']].copy()
@@ -855,51 +1003,58 @@ if load_status.get("success", False) and not shooting_data.empty:
                 action_eff_data = action_eff_data.dropna()
                 if not action_eff_data.empty:
                     action_stats = action_eff_data.groupby(action_type_col_rank)['SHOT_MADE_FLAG'].agg(['mean', 'count']).reset_index()
-                    action_stats_filtered = action_stats[action_stats['count'] >= min_attempts_eff_action].copy()
+                    action_stats_filtered = action_stats[action_stats['count'] >= min_attempts_eff_action_b].copy()
                     if not action_stats_filtered.empty:
                         action_stats_filtered['FG%'] = action_stats_filtered['mean'] * 100
                         action_stats_filtered = action_stats_filtered.sort_values(by='FG%', ascending=False).head(15)
                         fig_action_eff = px.bar(
                             action_stats_filtered, y=action_type_col_rank, x='FG%', orientation='h',
-                            title=f'Najefektywniejsze Typy Akcji ({action_choice}) (Top 15, min. {min_attempts_eff_action} prób)',
                             labels={'FG%': 'Skuteczność (%)', action_type_col_rank: ''}, text='FG%', hover_data=['count']
                         )
-                        fig_action_eff.update_layout(yaxis={'categoryorder': 'total ascending'}, xaxis_range=[0, 105], height=400)
+                        fig_action_eff.update_layout(yaxis={'categoryorder': 'total ascending'}, xaxis_range=[0, 105], height=400, margin=dict(t=0, b=0, l=0, r=0))
                         fig_action_eff.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
                         st.plotly_chart(fig_action_eff, use_container_width=True)
-                    else: st.caption(f"Brak typów akcji ('{action_type_col_rank}') z min. {min_attempts_eff_action} prób.")
+                    else: st.caption(f"Brak typów akcji ('{action_type_col_rank}') z min. {min_attempts_eff_action_b} prób.")
                 else: st.caption("Brak danych do obliczenia skuteczności akcji.")
             else: st.caption(f"Brak kolumn '{action_type_col_rank}' lub 'SHOT_MADE_FLAG'.")
+        # --- Koniec Zmiany Layoutu ---
 
+
+        # --- Reszta zakładki Rankingi Skuteczności ---
         st.markdown("---")
         st.subheader(f"Mapa Częstotliwości Rzutów")
         st.caption(f"Gęstość rzutów dla: {selected_season_type}")
-        num_bins_freq = st.slider("Dokładność mapy (X):", 20, 80, 50, 5, key='rank_frequency_map_bins')
-        nbins_y_freq = int(num_bins_freq * 1.0) # Dostosuj proporcje jeśli potrzebujesz
+        num_bins_freq = st.slider("Dokładność mapy (X):", 20, 80, 50, 5, key='rank_frequency_map_bins',
+                                  help="Liczba 'koszyków', na które dzielona jest oś X boiska do zliczania rzutów. Oś Y dostosuje się proporcjonalnie.")
+        nbins_y_freq = int(num_bins_freq * (470 / 500)) # Skalowanie liczby binów Y proporcjonalnie do wymiarów boiska
         fig_freq_map = plot_shot_frequency_heatmap(filtered_data, selected_season_type, nbins_x=num_bins_freq, nbins_y=nbins_y_freq)
         if fig_freq_map: st.plotly_chart(fig_freq_map, use_container_width=True)
         else: st.caption("Nie udało się wygenerować mapy częstotliwości.")
         st.markdown("---")
 
-        st.subheader(f"Rankingi Skuteczności")
+        st.subheader(f"Rankingi Skuteczności Graczy i Zespołów")
         st.caption(f"Top 10 dla: {selected_season_type}")
         st.markdown("##### Min. liczba prób")
         col_att1, col_att2, col_att3 = st.columns(3)
         with col_att1: min_total = st.number_input("Ogółem:", 10, 1000, 100, 10, key="rank_min_total")
         with col_att2: min_2pt = st.number_input("Za 2 pkt:", 5, 500, 50, 5, key="rank_min_2pt")
         with col_att3: min_3pt = st.number_input("Za 3 pkt:", 5, 500, 30, 5, key="rank_min_3pt")
+
+        # Oblicz rankingi dla graczy i zespołów
         tp_ov, tp_2, tp_3 = calculate_top_performers(filtered_data, 'PLAYER_NAME', min_total, min_2pt, min_3pt)
-        tt_ov, tt_2, tt_3 = calculate_top_performers(filtered_data, 'TEAM_NAME', min_total*5, min_2pt*5, min_3pt*5) # Zwiększone min. dla drużyn
+        tt_ov, tt_2, tt_3 = calculate_top_performers(filtered_data, 'TEAM_NAME', min_total*5, min_2pt*5, min_3pt*5) # Wyższe progi dla zespołów
+
         st.markdown("###### Skuteczność Ogółem (FG%)")
         c1_rank, c2_rank = st.columns(2)
         with c1_rank:
-             st.markdown(f"**Top 10 Graczy (min. {min_total} prób)**")
-             if tp_ov is not None and not tp_ov.empty: st.dataframe(tp_ov, use_container_width=True, hide_index=True, column_config={"FG%": st.column_config.ProgressColumn("FG%", format="%.1f%%", min_value=0, max_value=100)})
-             else: st.caption("Brak graczy spełniających kryteria.")
+            st.markdown(f"**Top 10 Graczy (min. {min_total} prób)**")
+            if tp_ov is not None and not tp_ov.empty: st.dataframe(tp_ov, use_container_width=True, hide_index=True, column_config={"FG%": st.column_config.ProgressColumn("FG%", format="%.1f%%", min_value=0, max_value=100)})
+            else: st.caption("Brak graczy spełniających kryteria.")
         with c2_rank:
-             st.markdown(f"**Top 10 Zespołów (min. {min_total*5} prób)**")
-             if tt_ov is not None and not tt_ov.empty: st.dataframe(tt_ov, use_container_width=True, hide_index=True, column_config={"FG%": st.column_config.ProgressColumn("FG%", format="%.1f%%", min_value=0, max_value=100)})
-             else: st.caption("Brak zespołów spełniających kryteria.")
+            st.markdown(f"**Top 10 Zespołów (min. {min_total*5} prób)**")
+            if tt_ov is not None and not tt_ov.empty: st.dataframe(tt_ov, use_container_width=True, hide_index=True, column_config={"FG%": st.column_config.ProgressColumn("FG%", format="%.1f%%", min_value=0, max_value=100)})
+            else: st.caption("Brak zespołów spełniających kryteria.")
+
         st.markdown("###### Skuteczność za 2 Punkty (2PT FG%)")
         c1_rank_2, c2_rank_2 = st.columns(2)
         with c1_rank_2:
@@ -910,6 +1065,7 @@ if load_status.get("success", False) and not shooting_data.empty:
             st.markdown(f"**Top 10 Zespołów (min. {min_2pt*5} prób)**")
             if tt_2 is not None and not tt_2.empty: st.dataframe(tt_2, use_container_width=True, hide_index=True, column_config={"2PT FG%": st.column_config.ProgressColumn("2PT FG%", format="%.1f%%", min_value=0, max_value=100)})
             else: st.caption("Brak zespołów spełniających kryteria.")
+
         st.markdown("###### Skuteczność za 3 Punkty (3PT FG%)")
         c1_rank_3, c2_rank_3 = st.columns(2)
         with c1_rank_3:
@@ -921,43 +1077,47 @@ if load_status.get("success", False) and not shooting_data.empty:
             if tt_3 is not None and not tt_3.empty: st.dataframe(tt_3, use_container_width=True, hide_index=True, column_config={"3PT FG%": st.column_config.ProgressColumn("3PT FG%", format="%.1f%%", min_value=0, max_value=100)})
             else: st.caption("Brak zespołów spełniających kryteria.")
 
-
     elif st.session_state.active_view == "⛹️ Analiza Gracza":
-        # --- Prefiks dla kluczy w tym widoku: player_ ---
+        # --- Prefiks dla kluczy widgetów w tym widoku: player_ ---
         st.header(f"Analiza Gracza: {selected_player}")
         if selected_player and 'PLAYER_NAME' in filtered_data.columns:
-            player_data = filter_data_by_player(selected_player, filtered_data) # player_data dziedziczy ACTION_TYPE_SIMPLE
+            player_data = filter_data_by_player(selected_player, filtered_data) # Filtruj dane dla wybranego gracza
             if not player_data.empty:
                 st.subheader("Statystyki Podstawowe")
-                # ... (kod obliczania i wyświetlania metryk gracza - bez zmian) ...
+                # Obliczanie statystyk podstawowych dla gracza
                 total_shots = len(player_data)
                 made_shots, shooting_pct = "N/A", "N/A"
                 if 'SHOT_MADE_FLAG' in player_data.columns:
-                     made_flag_numeric = pd.to_numeric(player_data['SHOT_MADE_FLAG'], errors='coerce').dropna()
-                     if not made_flag_numeric.empty:
-                         made_shots = int(made_flag_numeric.sum())
-                         if len(made_flag_numeric) > 0: shooting_pct = (made_shots / len(made_flag_numeric)) * 100
-                         else: shooting_pct = 0.0
-                     else: made_shots, shooting_pct = 0, 0.0
+                    made_flag_numeric = pd.to_numeric(player_data['SHOT_MADE_FLAG'], errors='coerce').dropna()
+                    if not made_flag_numeric.empty:
+                        made_shots = int(made_flag_numeric.sum())
+                        if len(made_flag_numeric) > 0: shooting_pct = (made_shots / len(made_flag_numeric)) * 100
+                        else: shooting_pct = 0.0
+                    else: made_shots, shooting_pct = 0, 0.0
+
                 pct_2pt, attempts_2pt_str = "N/A", "(brak danych)"
                 pct_3pt, attempts_3pt_str = "N/A", "(brak danych)"
                 if 'SHOT_TYPE' in player_data.columns and not player_data['SHOT_TYPE'].isnull().all():
-                     shot_type_2pt = '2PT Field Goal'
-                     data_2pt = player_data[player_data['SHOT_TYPE'] == shot_type_2pt]
-                     made_flag_2pt = pd.to_numeric(data_2pt['SHOT_MADE_FLAG'], errors='coerce').dropna()
-                     attempts_2pt = len(made_flag_2pt)
-                     if attempts_2pt > 0: made_2pt = int(made_flag_2pt.sum()); pct_2pt = (made_2pt / attempts_2pt) * 100; attempts_2pt_str = f"({made_2pt}/{attempts_2pt})"
-                     else: attempts_2pt_str = "(0 prób)"
-                     shot_type_3pt = '3PT Field Goal'
-                     data_3pt = player_data[player_data['SHOT_TYPE'] == shot_type_3pt]
-                     made_flag_3pt = pd.to_numeric(data_3pt['SHOT_MADE_FLAG'], errors='coerce').dropna()
-                     attempts_3pt = len(made_flag_3pt)
-                     if attempts_3pt > 0: made_3pt = int(made_flag_3pt.sum()); pct_3pt = (made_3pt / attempts_3pt) * 100; attempts_3pt_str = f"({made_3pt}/{attempts_3pt})"
-                     else: attempts_3pt_str = "(0 prób)"
+                    shot_type_2pt = '2PT Field Goal'
+                    data_2pt = player_data[player_data['SHOT_TYPE'] == shot_type_2pt]
+                    made_flag_2pt = pd.to_numeric(data_2pt['SHOT_MADE_FLAG'], errors='coerce').dropna()
+                    attempts_2pt = len(made_flag_2pt)
+                    if attempts_2pt > 0: made_2pt = int(made_flag_2pt.sum()); pct_2pt = (made_2pt / attempts_2pt) * 100; attempts_2pt_str = f"({made_2pt}/{attempts_2pt})"
+                    else: attempts_2pt_str = "(0 prób)"
+
+                    shot_type_3pt = '3PT Field Goal'
+                    data_3pt = player_data[player_data['SHOT_TYPE'] == shot_type_3pt]
+                    made_flag_3pt = pd.to_numeric(data_3pt['SHOT_MADE_FLAG'], errors='coerce').dropna()
+                    attempts_3pt = len(made_flag_3pt)
+                    if attempts_3pt > 0: made_3pt = int(made_flag_3pt.sum()); pct_3pt = (made_3pt / attempts_3pt) * 100; attempts_3pt_str = f"({made_3pt}/{attempts_3pt})"
+                    else: attempts_3pt_str = "(0 prób)"
+
                 avg_dist = "N/A"
                 if 'SHOT_DISTANCE' in player_data.columns and pd.api.types.is_numeric_dtype(player_data['SHOT_DISTANCE']):
-                     valid_distances = player_data['SHOT_DISTANCE'].dropna()
-                     if not valid_distances.empty: avg_dist = valid_distances.mean()
+                    valid_distances = player_data['SHOT_DISTANCE'].dropna()
+                    if not valid_distances.empty: avg_dist = valid_distances.mean()
+
+                # Wyświetlanie metryk
                 st.markdown("##### Statystyki Ogólne")
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Całk. rzutów", total_shots)
@@ -970,23 +1130,25 @@ if load_status.get("success", False) and not shooting_data.empty:
                 c6.metric("Śr. Odległość (stopy)", f"{avg_dist:.1f}" if isinstance(avg_dist, (float, int)) else "N/A")
                 st.markdown("---")
 
-
                 st.subheader("Wizualizacje Rzutów")
+                # Mapa rzutów gracza
                 fig_p_chart = plot_shot_chart(player_data, selected_player, "Gracz")
                 if fig_p_chart: st.plotly_chart(fig_p_chart, use_container_width=True)
-                else: st.warning("Nie można wygenerować mapy rzutów.")
+                else: st.warning("Nie można wygenerować mapy rzutów dla tego gracza (brak danych?).")
                 st.markdown("---")
 
                 st.subheader("Skuteczność vs Odległość")
+                # Wykres skuteczności vs odległość
                 cc1, cc2 = st.columns([1,2])
                 with cc1: bin_w = st.slider("Szerokość przedziału (stopy):", 1, 5, 1, key='player_eff_dist_bin')
                 with cc2: min_att = st.slider("Min. prób w przedziale:", 1, 50, 5, key='player_eff_dist_min')
                 fig_p_eff_dist = plot_player_eff_vs_distance(player_data, selected_player, bin_width=bin_w, min_attempts_per_bin=min_att)
                 if fig_p_eff_dist: st.plotly_chart(fig_p_eff_dist, use_container_width=True)
-                else: st.caption(f"Brak danych dla wykresu sk. vs odl. (min. {min_att} prób / {bin_w} stóp).")
+                else: st.caption(f"Brak wystarczających danych dla wykresu skuteczności vs odległość (min. {min_att} prób w przedziale {bin_w} stóp).")
                 st.markdown("---")
 
                 st.subheader("Strefy Rzutowe ('Hot Zones')")
+                # Mapa ciepła skuteczności w strefach
                 hz_min_shots = st.slider("Min. rzutów w strefie:", 3, 50, 5, key='player_hotzone_min_shots')
                 hz_bins = st.slider("Liczba stref na oś:", 5, 15, 10, key='player_hotzone_bins')
                 p_hot_zones = calculate_hot_zones(player_data, min_shots_in_zone=hz_min_shots, n_bins=hz_bins)
@@ -994,105 +1156,112 @@ if load_status.get("success", False) and not shooting_data.empty:
                     fig_p_hot = plot_hot_zones_heatmap(p_hot_zones, selected_player, "Gracz", min_shots_in_zone=hz_min_shots)
                     if fig_p_hot: st.plotly_chart(fig_p_hot, use_container_width=True)
                     else: st.info("Nie można wygenerować mapy stref.")
-                else: st.info(f"Brak danych do analizy stref (min. {hz_min_shots} prób/strefę).")
+                else: st.info(f"Brak wystarczających danych do analizy stref rzutowych (min. {hz_min_shots} prób na strefę).")
                 st.markdown("---")
 
                 st.subheader("Analiza Czasowa")
+                # Wykres skuteczności w kwartach
                 q_min_shots = st.slider("Min. prób w kwarcie/OT:", 3, 50, 5, key='player_quarter_min_shots')
                 fig_p_q = plot_player_quarter_eff(player_data, selected_player, min_attempts=q_min_shots)
                 if fig_p_q: st.plotly_chart(fig_p_q, use_container_width=True)
-                else: st.info(f"Brak danych do analizy kwart (min. {q_min_shots} prób).")
+                else: st.info(f"Brak wystarczających danych do analizy skuteczności w kwartach (min. {q_min_shots} prób).")
+
+                # Wykres trendu miesięcznego
                 m_min_shots = st.slider("Min. prób w miesiącu:", 5, 100, 10, key='player_month_min_shots')
                 fig_p_t = plot_player_season_trend(player_data, selected_player, min_monthly_attempts=m_min_shots)
                 if fig_p_t: st.plotly_chart(fig_p_t, use_container_width=True)
-                else: st.info(f"Brak danych do analizy trendu (min. {m_min_shots} prób/miesiąc).")
+                else: st.info(f"Brak wystarczających danych do analizy trendu miesięcznego (min. {m_min_shots} prób miesięcznie i/lub min. 2 miesiące).")
                 st.markdown("---")
 
                 st.subheader("Analiza wg Typu Akcji / Strefy")
+                # Wykresy skuteczności wg grup
                 g_min_shots = st.slider("Min. prób w grupie:", 3, 50, 5, key='player_group_min_shots')
+
+                # Wybór typu akcji (oryginalny vs uproszczony) dla wykresu grupowego
+                action_type_col_player = 'ACTION_TYPE'
+                action_choice_player = 'Oryginalne'
+                if 'ACTION_TYPE_SIMPLE' in player_data.columns:
+                     action_choice_options_player = ('Oryginalne', 'Uproszczone')
+                     default_action_index_player = 1 # Domyślnie uproszczone
+                     action_choice_player = st.radio("Pokaż typy akcji dla skuteczności:", action_choice_options_player,
+                                                     key='player_action_type_choice', horizontal=True, index=default_action_index_player)
+                     if action_choice_player == 'Uproszczone':
+                         action_type_col_player = 'ACTION_TYPE_SIMPLE'
+
+
                 cg1, cg2 = st.columns(2)
                 with cg1:
-                    # Dodano wybór dla typu akcji
-                    group_choice_player = st.radio(
-                        "Grupuj typ akcji wg:",
-                        ('Oryginalny', 'Uproszczony') if 'ACTION_TYPE_SIMPLE' in player_data.columns else ('Oryginalny',),
-                        key='player_action_group_choice', horizontal=True, index=1 if 'ACTION_TYPE_SIMPLE' in player_data.columns else 0
-                    )
-                    group_col_action_player = 'ACTION_TYPE_SIMPLE' if group_choice_player == 'Uproszczony' else 'ACTION_TYPE'
-
-                    if group_col_action_player in player_data.columns:
-                         fig_p_a = plot_grouped_effectiveness(player_data, group_col_action_player, selected_player, "Gracz", top_n=10, min_attempts=g_min_shots)
-                         if fig_p_a: st.plotly_chart(fig_p_a, use_container_width=True)
-                         else: st.caption(f"Brak danych wg '{group_col_action_player}' (min. {g_min_shots} prób).")
-                    else:
-                         st.caption(f"Brak kolumny '{group_col_action_player}'.")
-
+                    st.markdown(f"###### Skuteczność wg Typu Akcji ({action_choice_player})")
+                    fig_p_a = plot_grouped_effectiveness(player_data, action_type_col_player, selected_player, "Gracz", top_n=10, min_attempts=g_min_shots)
+                    if fig_p_a: st.plotly_chart(fig_p_a, use_container_width=True)
+                    else: st.caption(f"Brak wystarczających danych wg typu akcji '{action_choice_player}' (min. {g_min_shots} prób).")
                 with cg2:
+                    st.markdown("###### Skuteczność wg Strefy Podstawowej")
                     fig_p_z = plot_grouped_effectiveness(player_data, 'SHOT_ZONE_BASIC', selected_player, "Gracz", top_n=7, min_attempts=g_min_shots)
                     if fig_p_z: st.plotly_chart(fig_p_z, use_container_width=True)
-                    else: st.caption(f"Brak danych wg strefy (min. {g_min_shots} prób).")
+                    else: st.caption(f"Brak wystarczających danych wg strefy podstawowej (min. {g_min_shots} prób).")
             else:
-                st.warning(f"Brak danych dla gracza '{selected_player}' w wybranym typie sezonu.")
+                st.warning(f"Brak danych dla gracza '{selected_player}' w wybranym typie sezonu '{selected_season_type}'.")
         else:
-            st.info("Wybierz gracza z panelu bocznego.")
-
+            st.info("Wybierz gracza z panelu bocznego, aby zobaczyć jego analizę.")
 
     elif st.session_state.active_view == "🆚 Porównanie Graczy":
-        # --- Prefiks dla kluczy w tym widoku: comp_ ---
+        # --- Prefiks dla kluczy widgetów w tym widoku: comp_ ---
         st.header("Porównanie Graczy")
         if len(selected_players_compare) >= 2:
             st.write(f"Porównujesz: {', '.join(selected_players_compare)}")
-            compare_data_base = shooting_data[shooting_data['PLAYER_NAME'].isin(selected_players_compare)].copy()
-            if selected_season_type != 'Wszystko' and 'SEASON_TYPE' in compare_data_base.columns:
-                 compare_data_filtered = compare_data_base[compare_data_base['SEASON_TYPE'] == selected_season_type].copy()
-            else:
-                 compare_data_filtered = compare_data_base.copy()
+            # Filtruj dane tylko dla wybranych graczy DO PORÓWNANIA (bazując na danych już przefiltrowanych wg sezonu)
+            compare_data_filtered = filtered_data[filtered_data['PLAYER_NAME'].isin(selected_players_compare)].copy()
 
             if not compare_data_filtered.empty:
                 st.subheader("Skuteczność vs Odległość")
+                # Porównanie sk. vs odl.
                 comp_eff_dist_bin = st.slider("Szerokość przedziału (stopy):", 1, 5, 3, key='comp_eff_dist_bin')
                 comp_eff_dist_min = st.slider("Min. prób w przedziale:", 3, 50, 5, key='comp_eff_dist_min')
                 fig_comp_eff_dist = plot_comparison_eff_distance(compare_data_filtered, selected_players_compare, bin_width=comp_eff_dist_bin, min_attempts_per_bin=comp_eff_dist_min)
                 if fig_comp_eff_dist: st.plotly_chart(fig_comp_eff_dist, use_container_width=True)
-                else: st.caption(f"Brak danych dla porównania sk. vs odl. (min. {comp_eff_dist_min} prób / {comp_eff_dist_bin} stóp).")
+                else: st.caption(f"Brak wystarczających danych dla porównania skuteczności vs odległość (min. {comp_eff_dist_min} prób w przedziale {comp_eff_dist_bin} stóp).")
                 st.markdown("---")
 
                 st.subheader("Skuteczność wg Strefy Rzutowej")
+                # Porównanie wg strefy
                 min_attempts_zone = st.slider("Min. prób w strefie:", 3, 50, 5, key='comp_zone_min')
                 fig_comp_zone = plot_comparison_eff_by_zone(compare_data_filtered, selected_players_compare, min_shots_per_zone=min_attempts_zone)
                 if fig_comp_zone: st.plotly_chart(fig_comp_zone, use_container_width=True)
-                else: st.caption(f"Brak danych dla porównania wg stref (min. {min_attempts_zone} prób).")
+                else: st.caption(f"Brak wystarczających danych dla porównania wg stref (min. {min_attempts_zone} prób w strefie).")
                 st.markdown("---")
 
                 st.subheader("Mapy Rzutów")
+                # Wyświetlanie map rzutów dla porównywanych graczy
                 num_players_comp = len(selected_players_compare)
-                cols = st.columns(num_players_comp)
+                cols = st.columns(num_players_comp) # Utwórz kolumny dla każdego gracza
                 for i, player in enumerate(selected_players_compare):
                     with cols[i]:
                         st.markdown(f"**{player}**")
                         player_comp_data = compare_data_filtered[compare_data_filtered['PLAYER_NAME'] == player]
                         if not player_comp_data.empty:
-                            chart_key = f"comp_chart_{player.replace(' ','_').replace('.','')}"
+                            chart_key = f"comp_chart_{player.replace(' ','_').replace('.','')}" # Unikalny klucz dla wykresu
                             fig_comp_chart = plot_shot_chart(player_comp_data, player, "Gracz")
                             if fig_comp_chart:
-                                fig_comp_chart.update_layout(height=450, title="")
+                                fig_comp_chart.update_layout(height=450, title="") # Zmniejsz wysokość i usuń tytuł
                                 st.plotly_chart(fig_comp_chart, use_container_width=True, key=chart_key)
-                            else: st.caption("Błąd mapy.")
-                        else: st.caption("Brak danych w sezonie.")
+                            else: st.caption("Błąd generowania mapy.")
+                        else: st.caption("Brak danych w wybranym sezonie.")
             else:
-                st.warning(f"Brak danych dla wybranych graczy w sezonie '{selected_season_type}'.")
+                st.warning(f"Brak danych dla wybranych graczy do porównania w sezonie '{selected_season_type}'.")
         else:
             st.info("Wybierz min. 2 graczy do porównania z panelu bocznego.")
 
 
     elif st.session_state.active_view == "🏀 Analiza Zespołowa":
-        # --- Prefiks dla kluczy w tym widoku: team_ ---
+        # --- Prefiks dla kluczy widgetów w tym widoku: team_ ---
         st.header(f"Analiza Zespołowa: {selected_team}")
         if selected_team and 'TEAM_NAME' in filtered_data.columns:
-            team_data = filter_data_by_team(selected_team, filtered_data) # team_data dziedziczy ACTION_TYPE_SIMPLE
+            team_data = filter_data_by_team(selected_team, filtered_data) # Filtruj dane dla wybranej drużyny
             if not team_data.empty:
+                # Statystyki podstawowe zespołu
                 st.subheader("Statystyki Podstawowe Zespołu")
-                t_stats = get_basic_stats(team_data, selected_team, "Zespół")
+                t_stats = get_basic_stats(team_data, selected_team, "Zespół") # Użyj funkcji pomocniczej
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Rzuty Zespołu", t_stats.get('total_shots', 'N/A'))
                 c2.metric("Trafione Zespołu", t_stats.get('made_shots', 'N/A'))
@@ -1100,6 +1269,7 @@ if load_status.get("success", False) and not shooting_data.empty:
                 c3.metric("Skuteczność Zespołu", f"{pct_val:.1f}%" if isinstance(pct_val, (float, int)) else "N/A")
                 st.markdown("---")
 
+                # Wizualizacje dla zespołu (analogiczne do gracza)
                 st.subheader("Wizualizacje Rzutów Zespołu")
                 fig_t_c = plot_shot_chart(team_data, selected_team, "Zespół")
                 if fig_t_c: st.plotly_chart(fig_t_c, use_container_width=True)
@@ -1110,7 +1280,7 @@ if load_status.get("success", False) and not shooting_data.empty:
                 t_eff_dist_min = st.slider("Min. prób w przedziale:", 5, 100, 10, key='team_eff_dist_min')
                 fig_t_ed = plot_player_eff_vs_distance(team_data, selected_team, bin_width=t_eff_dist_bin, min_attempts_per_bin=t_eff_dist_min)
                 if fig_t_ed: st.plotly_chart(fig_t_ed, use_container_width=True)
-                else: st.caption(f"Brak danych dla wykresu sk. vs odl. (min. {t_eff_dist_min} prób / {t_eff_dist_bin} stóp).")
+                else: st.caption(f"Brak wystarczających danych dla wykresu sk. vs odl. zespołu (min. {t_eff_dist_min} prób / {t_eff_dist_bin} stóp).")
                 st.markdown("---")
 
                 st.subheader("Strefy Rzutowe ('Hot Zones') Zespołu")
@@ -1121,530 +1291,629 @@ if load_status.get("success", False) and not shooting_data.empty:
                     fig_t_h = plot_hot_zones_heatmap(t_hz, selected_team, "Zespół", min_shots_in_zone=t_hz_min_shots)
                     if fig_t_h: st.plotly_chart(fig_t_h, use_container_width=True)
                     else: st.info("Nie można wygenerować mapy stref zespołu.")
-                else: st.info(f"Brak danych do analizy stref zespołu (min. {t_hz_min_shots} prób/strefę).")
+                else: st.info(f"Brak wystarczających danych do analizy stref zespołu (min. {t_hz_min_shots} prób/strefę).")
                 st.markdown("---")
 
                 st.subheader("Analiza Czasowa Zespołu")
                 t_q_min_shots = st.slider("Min. prób w kwarcie/OT:", 5, 100, 10, key='team_quarter_min_shots')
                 fig_t_q = plot_player_quarter_eff(team_data, selected_team, "Zespół", min_attempts=t_q_min_shots)
                 if fig_t_q: st.plotly_chart(fig_t_q, use_container_width=True)
-                else: st.info(f"Brak danych do analizy kwart zespołu (min. {t_q_min_shots} prób).")
+                else: st.info(f"Brak wystarczających danych do analizy kwart zespołu (min. {t_q_min_shots} prób).")
                 st.markdown("---")
 
                 st.subheader("Analiza Zespołu wg Typu Akcji / Strefy")
                 t_g_min_shots = st.slider("Min. prób w grupie:", 5, 100, 10, key='team_group_min_shots')
+
+                 # Wybór typu akcji (oryginalny vs uproszczony) dla wykresu grupowego zespołu
+                action_type_col_team = 'ACTION_TYPE'
+                action_choice_team = 'Oryginalne'
+                if 'ACTION_TYPE_SIMPLE' in team_data.columns:
+                     action_choice_options_team = ('Oryginalne', 'Uproszczone')
+                     default_action_index_team = 1 # Domyślnie uproszczone
+                     action_choice_team = st.radio("Pokaż typy akcji dla skuteczności zespołu:", action_choice_options_team,
+                                                     key='team_action_type_choice', horizontal=True, index=default_action_index_team)
+                     if action_choice_team == 'Uproszczone':
+                         action_type_col_team = 'ACTION_TYPE_SIMPLE'
+
                 cg1, cg2 = st.columns(2)
                 with cg1:
-                    # Dodano wybór dla typu akcji
-                    group_choice_team = st.radio(
-                        "Grupuj typ akcji wg:",
-                        ('Oryginalny', 'Uproszczony') if 'ACTION_TYPE_SIMPLE' in team_data.columns else ('Oryginalny',),
-                        key='team_action_group_choice', horizontal=True, index=1 if 'ACTION_TYPE_SIMPLE' in team_data.columns else 0
-                    )
-                    group_col_action_team = 'ACTION_TYPE_SIMPLE' if group_choice_team == 'Uproszczony' else 'ACTION_TYPE'
-
-                    if group_col_action_team in team_data.columns:
-                        fig_t_a = plot_grouped_effectiveness(team_data, group_col_action_team, selected_team, "Zespół", top_n=10, min_attempts=t_g_min_shots)
-                        if fig_t_a: st.plotly_chart(fig_t_a, use_container_width=True)
-                        else: st.caption(f"Brak danych zespołu wg '{group_col_action_team}' (min. {t_g_min_shots} prób).")
-                    else:
-                         st.caption(f"Brak kolumny '{group_col_action_team}'.")
-
+                    st.markdown(f"###### Skuteczność Zespołu wg Typu Akcji ({action_choice_team})")
+                    fig_t_a = plot_grouped_effectiveness(team_data, action_type_col_team, selected_team, "Zespół", top_n=10, min_attempts=t_g_min_shots)
+                    if fig_t_a: st.plotly_chart(fig_t_a, use_container_width=True)
+                    else: st.caption(f"Brak wystarczających danych zespołu wg typu akcji '{action_choice_team}' (min. {t_g_min_shots} prób).")
                 with cg2:
+                    st.markdown("###### Skuteczność Zespołu wg Strefy Podstawowej")
                     fig_t_z = plot_grouped_effectiveness(team_data, 'SHOT_ZONE_BASIC', selected_team, "Zespół", top_n=7, min_attempts=t_g_min_shots)
                     if fig_t_z: st.plotly_chart(fig_t_z, use_container_width=True)
-                    else: st.caption(f"Brak danych zespołu wg strefy (min. {t_g_min_shots} prób).")
+                    else: st.caption(f"Brak wystarczających danych zespołu wg strefy podstawowej (min. {t_g_min_shots} prób).")
             else:
-                st.warning(f"Brak danych dla drużyny '{selected_team}' w wybranym typie sezonu.")
+                st.warning(f"Brak danych dla drużyny '{selected_team}' w wybranym typie sezonu '{selected_season_type}'.")
         else:
-            st.info("Wybierz drużynę z panelu bocznego.")
+            st.info("Wybierz drużynę z panelu bocznego, aby zobaczyć jej analizę.")
 
 
     elif st.session_state.active_view == "🎯 Ocena Modelu (KNN)":
-        # --- Prefiks dla kluczy w tym widoku: knn_eval_ ---
+        # --- Prefiks dla kluczy widgetów w tym widoku: knn_eval_ ---
         st.header(f"Ocena Modelu Predykcyjnego (KNN) dla: {selected_player}")
 
-        # === AKTUALIZACJA OPISU - wspominamy o ACTION_TYPE_SIMPLE ===
         st.markdown(f"""
         ### Interpretacja Wyników Rozszerzonego Modelu KNN ({selected_player})
 
-        Zakładka ta prezentuje model K-Najbliższych Sąsiadów (KNN) do przewidywania wyniku rzutu (celny/niecelny), wykorzystując cechy numeryczne (`LOC_X`, `LOC_Y`, `SHOT_DISTANCE`) oraz kategoryczne.
+        Zakładka ta prezentuje model K-Najbliższych Sąsiadów (KNN) do przewidywania wyniku rzutu (celny/niecelny), rozszerzony o dodatkowe cechy kategoryczne: `ACTION_TYPE`, `SHOT_TYPE` i `PERIOD`. Ocenia jego wydajność na dwa sposoby:
 
         **Obsługa Cech Kategorycznych:**
 
-        * Cechy kategoryczne takie jak `SHOT_TYPE`, `PERIOD` oraz **uproszczony typ akcji (`ACTION_TYPE_SIMPLE`)** zostały przekształcone za pomocą **One-Hot Encoding (OHE)**. Uproszczenie `ACTION_TYPE` grupuje podobne akcje (np. różne rodzaje rzutów z wyskoku) w jedną kategorię, co może pomóc modelowi w generalizacji i zmniejszyć wymiarowość danych.
-        * Cechy numeryczne są **skalowane** za pomocą `StandardScaler`.
-        * Całe przetwarzanie odbywa się w ramach `Pipeline` z `ColumnTransformer`.
+        * Algorytm KNN działa na podstawie odległości między punktami danych w przestrzeni cech. Aby uwzględnić cechy nienumeryczne (jak typ akcji, typ rzutu czy kwarta), zostały one przekształcone za pomocą **One-Hot Encoding (OHE)**.
+        * OHE tworzy nowe, binarne (0 lub 1) kolumny dla każdej unikalnej wartości w oryginalnej kolumnie kategorycznej. Na przykład, dla `SHOT_TYPE` mogą powstać kolumny `SHOT_TYPE_2PT Field Goal` i `SHOT_TYPE_3PT Field Goal`.
+        * Cechy numeryczne (`LOC_X`, `LOC_Y`, `SHOT_DISTANCE`) są nadal **skalowane** za pomocą `StandardScaler`, aby miały podobny wpływ na obliczaną odległość.
+        * Zarówno OHE, jak i skalowanie są wykonywane w ramach `Pipeline` za pomocą `ColumnTransformer`, co zapewnia spójne przetwarzanie danych treningowych i testowych.
 
-        **Ocena Wydajności:**
+        **1. Walidacja Krzyżowa (Stratified K-Fold) - Ocena Ogólnej Wydajności:**
 
-        * **Walidacja Krzyżowa:** Ocenia ogólną, stabilną wydajność modelu na wielu podziałach danych.
-        * **Pojedynczy Podział Trening/Test:** Dostarcza szczegółowych metryk (Raport Klasyfikacji, Macierz Pomyłek) dla jednego, konkretnego podziału.
+        * **Cel:** Uzyskanie bardziej **niezawodnej i stabilnej** oceny, jak dobrze *rozszerzony* model prawdopodobnie będzie działał na nowych danych.
+        * **Jak działa:** Dane gracza są dzielone na `n` części (folds) z zachowaniem proporcji klas. Model (teraz `ColumnTransformer` + `KNN` w `Pipeline`) jest trenowany `n` razy na `n-1` częściach i testowany na pozostałej.
+        * **Wyniki:** Średnia dokładność i odchylenie standardowe pokazują oczekiwaną skuteczność i stabilność *rozszerzonego* modelu.
 
-        Wyniki pokazują, jak dobrze model KNN radzi sobie z przewidywaniem wyniku rzutu dla gracza `{selected_player}`, uwzględniając zarówno lokalizację, dystans, jak i typ rzutu, kwartę oraz **uproszczony typ akcji**.
+        **2. Ocena na Pojedynczym Podziale Trening/Test - Szczegółowa Analiza:**
+
+        * **Cel:** Zaprezentowanie **szczegółowych metryk** (Raport Klasyfikacji) i **wizualizacji błędów** (Macierz Pomyłek) dla *jednego konkretnego* podziału danych, aby zrozumieć, jakie błędy popełnia *rozszerzony* model.
+        * **Jak działa:** Dane są jednorazowo dzielone (zgodnie z wybranym procentem). Ten sam `Pipeline` (`ColumnTransformer` + `KNN`) jest trenowany na zbiorze treningowym i oceniany na testowym.
+        * **Wyniki:** Dokładność, Raport Klasyfikacji (Precision, Recall, F1-Score, Support) i Macierz Pomyłek (TP, TN, FP, FN) pokazują szczegółowe działanie *rozszerzonego* modelu na tym konkretnym podziale.
+
+        **Podsumowanie:** Walidacja krzyżowa daje lepszy obraz *ogólnej* wydajności rozszerzonego modelu, podczas gdy pojedynczy podział dostarcza *szczegółowego wglądu* w jego działanie. Wyniki z pojedynczego podziału mogą zależeć od losowego podziału (`random_state=42`). Dodanie cech kategorycznych może (ale nie musi) poprawić dokładność modelu, ale zwiększa też złożoność (więcej wymiarów po OHE).
         """)
-        # === KONIEC AKTUALIZACJI OPISU ===
 
         if selected_player:
-            player_model_data = filter_data_by_player(selected_player, filtered_data) # Już zawiera ACTION_TYPE_SIMPLE
+            player_model_data = filter_data_by_player(selected_player, filtered_data) # Użyj danych przefiltrowanych wg sezonu
             if not player_model_data.empty:
+                # Definicja cech i zmiennej docelowej
                 numerical_features = ['LOC_X', 'LOC_Y', 'SHOT_DISTANCE']
-                # Używamy ACTION_TYPE_SIMPLE zamiast ACTION_TYPE
-                categorical_features = ['ACTION_TYPE_SIMPLE', 'SHOT_TYPE', 'PERIOD'] # <-- ZMIANA
+                # Użyj ACTION_TYPE_SIMPLE jeśli istnieje i jest wybrane, inaczej ACTION_TYPE
+                action_type_col_model = 'ACTION_TYPE' # Domyślnie
+                if 'ACTION_TYPE_SIMPLE' in player_model_data.columns:
+                     # Można dodać radio button, aby użytkownik wybrał, której kolumny użyć
+                     use_simple_action_knn = st.checkbox("Użyj uproszczonych typów akcji (ACTION_TYPE_SIMPLE) w modelu KNN?", value=True, key='knn_eval_use_simple_action')
+                     if use_simple_action_knn:
+                         action_type_col_model = 'ACTION_TYPE_SIMPLE'
+
+                categorical_features = [action_type_col_model, 'SHOT_TYPE', 'PERIOD']
                 target_variable = 'SHOT_MADE_FLAG'
                 all_features = numerical_features + categorical_features
 
-                # Sprawdzamy czy WSZYSTKIE potrzebne kolumny (w tym nowa) istnieją
-                if all(feat in player_model_data.columns for feat in all_features) and target_variable in player_model_data.columns:
-                    pmdc = player_model_data[all_features + [target_variable]].dropna().copy() # Usuwamy NaN w cechach i target
+                # Sprawdzenie czy wszystkie potrzebne kolumny istnieją
+                missing_cols = [col for col in all_features + [target_variable] if col not in player_model_data.columns]
+                if not missing_cols:
+                    # Przygotowanie danych: usuwanie NaN, konwersja typów
+                    pmdc = player_model_data[all_features + [target_variable]].dropna().copy()
                     pmdc[target_variable] = pd.to_numeric(pmdc[target_variable], errors='coerce')
-                    pmdc = pmdc.dropna(subset=[target_variable]) # Ponownie, tylko dla pewności dla targetu
-                    # Upewnij się, że kolumny kategoryczne są typu string
+                    pmdc = pmdc.dropna(subset=[target_variable]) # Usuń NaN w target
+                    # Konwertuj kolumny kategoryczne na string
                     for col in categorical_features: pmdc[col] = pmdc[col].astype(str)
 
-                    if pmdc[target_variable].nunique() != 2 and not pmdc.empty:
-                        st.warning("Pozostała tylko jedna klasa wyniku rzutu. Nie można zbudować modelu.")
-                    elif pmdc.empty or len(pmdc) < 10 : # Zwiększamy próg, OHE generuje więcej kolumn
-                        st.warning(f"Brak wystarczającej ilości ważnych danych ({len(pmdc)}) dla gracza '{selected_player}' do zbudowania modelu KNN.")
+                    # Sprawdzenie, czy mamy obie klasy (0 i 1)
+                    if pmdc[target_variable].nunique() < 2 and not pmdc.empty:
+                        st.warning(f"Dla gracza '{selected_player}' pozostała tylko jedna klasa wyniku rzutu po przetworzeniu danych. Nie można zbudować modelu klasyfikacyjnego.")
+                    elif pmdc.empty:
+                        st.warning(f"Brak kompletnych danych (po usunięciu NaN) dla gracza '{selected_player}' do zbudowania modelu.")
                     else:
-                        pmdc[target_variable] = pmdc[target_variable].astype(int)
-                        min_samples_for_model = 50 # Można dostosować
+                        pmdc[target_variable] = pmdc[target_variable].astype(int) # Konwersja target na int
+                        min_samples_for_model = 50 # Minimalna liczba próbek do budowy modelu
                         if len(pmdc) >= min_samples_for_model:
                             st.subheader("Konfiguracja Modelu KNN i Oceny")
-                            # Zwiększony górny limit dla k z powodu potencjalnie mniejszej liczby próbek po dropna
-                            max_k = max(3, min(25, len(pmdc)//3))
-                            if max_k < 3: max_k = 3 # k musi być co najmniej 3
-                            default_k = min(5, max_k)
-                            k = st.slider("Liczba sąsiadów (k):", 3, max_k, default_k, 1, key='knn_eval_k') # Krok 1 zamiast 2
-
-                            n_splits = st.slider("Liczba podziałów CV:", 3, min(10, len(pmdc)//2 if len(pmdc)>5 else 3), 5, 1, key='knn_eval_cv_splits')
+                            # Slidery do konfiguracji
+                            k = st.slider("Liczba sąsiadów (k):", 3, min(25, len(pmdc)//3), 5, 2, key='knn_eval_k')
+                            n_splits = st.slider("Liczba podziałów CV:", 3, 10, 5, 1, key='knn_eval_cv_splits')
                             st.markdown("---")
                             st.subheader("Konfiguracja Pojedynczego Podziału Testowego")
                             test_size_percent = st.slider("Rozmiar zbioru testowego (%):", 10, 50, 20, 5, key='knn_eval_test_split', format="%d%%")
                             train_size_percent = 100 - test_size_percent
                             test_size_float = test_size_percent / 100.0
+
                             if st.button(f"Uruchom Ocenę Modelu KNN dla {selected_player}", key='knn_eval_run_button'):
+                                # Definicja preprocesora i pipeline'u
                                 preprocessor = ColumnTransformer(
-                                    transformers=[('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'), categorical_features), # Używa nowej listy cech
-                                                  ('num', StandardScaler(), numerical_features)],
-                                    remainder='passthrough' # Zachowuje kolumny nie wymienione (choć tu nie powinno ich być w X)
+                                    transformers=[
+                                        ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'), categorical_features),
+                                        ('num', StandardScaler(), numerical_features)],
+                                    remainder='passthrough' # Zachowaj inne kolumny (chociaż nie powinno ich być)
                                 )
-                                pipeline = Pipeline([('preprocessor', preprocessor), ('knn', KNeighborsClassifier(n_neighbors=k))])
+                                pipeline = Pipeline([
+                                    ('preprocessor', preprocessor),
+                                    ('knn', KNeighborsClassifier(n_neighbors=k))
+                                ])
+
                                 X = pmdc[all_features]
                                 y = pmdc[target_variable]
 
-                                # Sprawdzenie czy mamy wystarczająco próbek dla CV
-                                if len(y.unique()) < 2:
-                                     st.error("Błąd: Tylko jedna klasa w danych. Nie można wykonać StratifiedKFold.")
-                                elif any(np.bincount(y) < n_splits):
-                                    st.error(f"Błąd: Liczba podziałów CV ({n_splits}) jest większa niż liczba próbek w najmniejszej klasie. Zmniejsz liczbę podziałów CV.")
-                                else:
-                                    st.markdown("---"); st.subheader(f"1. Wyniki {n_splits}-krotnej Walidacji Krzyżowej (KNN)")
-                                    with st.spinner(f"CV KNN (k={k}, folds={n_splits})..."):
-                                        try:
-                                            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-                                            scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy', n_jobs=-1)
-                                            st.success("CV KNN zakończona.")
-                                            st.metric("Średnia dokładność:", f"{scores.mean():.2%}")
-                                            st.metric("Odch. std.:", f"{scores.std():.4f}")
-                                            st.text("Foldy: " + ", ".join([f"{s:.2%}" for s in scores]))
-                                        except ValueError as ve:
-                                             if "less than n_splits" in str(ve):
-                                                 st.error(f"Błąd CV KNN: Liczba podziałów ({n_splits}) jest większa niż liczba próbek w jednej z klas. Zmniejsz liczbę podziałów CV.")
-                                             else:
-                                                 st.error(f"Błąd CV KNN (ValueError): {ve}")
-                                        except Exception as e_cv: st.error(f"Błąd CV KNN: {e_cv}")
+                                # 1. Walidacja Krzyżowa
+                                st.markdown("---"); st.subheader(f"1. Wyniki {n_splits}-krotnej Walidacji Krzyżowej (KNN)")
+                                with st.spinner(f"Uruchamianie {n_splits}-krotnej walidacji krzyżowej KNN (k={k})..."):
+                                    try:
+                                        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                                        scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy', n_jobs=-1)
+                                        st.success("Walidacja krzyżowa KNN zakończona.")
+                                        st.metric("Średnia dokładność (CV):", f"{scores.mean():.2%}")
+                                        st.metric("Odchylenie standardowe (CV):", f"{scores.std():.4f}")
+                                        st.text("Dokładności w poszczególnych foldach: " + ", ".join([f"{s:.2%}" for s in scores]))
+                                    except Exception as e_cv:
+                                        st.error(f"Wystąpił błąd podczas walidacji krzyżowej KNN: {e_cv}")
 
-                                    st.markdown("---"); st.subheader(f"2. Ocena KNN na Podziale ({train_size_percent}%/{test_size_percent}%)")
-                                    with st.spinner(f"Ocena KNN na podziale (k={k})..."):
-                                        try:
-                                            # Sprawdzenie czy podział jest możliwy ze stratyfikacją
-                                            if len(y.unique()) < 2:
-                                                 st.error("Błąd: Tylko jedna klasa w danych. Nie można wykonać podziału trening/test.")
-                                            elif any(np.bincount(y) < 2): # Potrzebujemy co najmniej 2 próbki w każdej klasie do stratyfikacji
-                                                 st.warning("Ostrzeżenie: Jedna z klas ma mniej niż 2 próbki. Wykonuję podział bez stratyfikacji.")
-                                                 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float, random_state=42, stratify=None)
-                                            else:
-                                                 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float, random_state=42, stratify=y)
+                                # 2. Ocena na pojedynczym podziale
+                                st.markdown("---"); st.subheader(f"2. Ocena KNN na Podziale Trening/Test ({train_size_percent}%/{test_size_percent}%)")
+                                with st.spinner(f"Trenowanie i ocena KNN na pojedynczym podziale (k={k})..."):
+                                     try:
+                                         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float, random_state=42, stratify=y)
+                                         if X_test.empty:
+                                             st.warning("Zbiór testowy jest pusty po podziale. Nie można przeprowadzić oceny.")
+                                         else:
+                                             # Trenowanie pipeline'u
+                                             pipeline.fit(X_train, y_train)
+                                             # Predykcja na zbiorze testowym
+                                             y_pred_single = pipeline.predict(X_test)
+                                             # Obliczanie metryk
+                                             accuracy_single = accuracy_score(y_test, y_pred_single)
+                                             report_dict = classification_report(y_test, y_pred_single, target_names=['Niecelny', 'Celny'], output_dict=True, zero_division=0)
+                                             cm = confusion_matrix(y_test, y_pred_single)
 
-                                            if len(X_test) == 0: st.warning("Pusty zbiór testowy.")
-                                            elif len(X_train) == 0: st.warning("Pusty zbiór treningowy.")
-                                            else:
-                                                pipeline.fit(X_train, y_train)
-                                                y_pred_single = pipeline.predict(X_test)
-                                                accuracy_single = accuracy_score(y_test, y_pred_single)
-                                                report_dict = classification_report(y_test, y_pred_single, target_names=['Niecelny', 'Celny'], output_dict=True, zero_division=0)
-                                                cm = confusion_matrix(y_test, y_pred_single)
-                                                st.success("Ocena KNN zakończona.")
-                                                st.metric("Dokładność:", f"{accuracy_single:.2%}")
-                                                st.subheader("Raport Klasyfikacji (KNN):")
-                                                report_df = pd.DataFrame(report_dict).transpose()
-                                                st.dataframe(report_df.style.format({'precision': '{:.2%}', 'recall': '{:.2%}', 'f1-score': '{:.2f}', 'support': '{:.0f}'}))
-                                                st.subheader("Macierz Pomyłek (KNN):")
-                                                # Upewnij się, że mamy obie klasy w y_test i y_pred_single dla poprawnego wyświetlenia macierzy
-                                                labels_cm = sorted(pd.concat([y_test, pd.Series(y_pred_single)]).unique())
-                                                labels_cm_names = ['Niecelny' if i == 0 else 'Celny' for i in labels_cm]
-                                                if len(labels_cm) == 2: # Tylko jeśli mamy obie klasy
-                                                     fig_cm = px.imshow(cm, text_auto=True, labels=dict(x="Predykcja", y="Prawda"), x=labels_cm_names, y=labels_cm_names, title="Macierz Pomyłek KNN")
-                                                else: # Jeśli jest tylko jedna klasa (mimo prób zapobiegania)
-                                                     fig_cm = px.imshow(cm, text_auto=True, title=f"Macierz Pomyłek KNN (tylko klasa: {labels_cm_names[0]})")
+                                             st.success("Ocena KNN na pojedynczym podziale zakończona.")
+                                             st.metric("Dokładność (na podziale testowym):", f"{accuracy_single:.2%}")
 
-                                                st.plotly_chart(fig_cm, use_container_width=True)
-                                        except Exception as e: st.error(f"Błąd oceny KNN: {e}")
-                        else: st.warning(f"Niewystarczająca ilość danych ({len(pmdc)}) dla KNN po usunięciu NaN. Minimum: {min_samples_for_model}.")
-                else: st.warning(f"Brak wymaganych kolumn (w tym ACTION_TYPE_SIMPLE) dla '{selected_player}'. Nie można zbudować modelu.")
-            else: st.warning(f"Brak danych dla gracza '{selected_player}'.")
-        else: st.info("Wybierz gracza do oceny KNN.")
+                                             st.subheader("Raport Klasyfikacji (KNN):")
+                                             report_df = pd.DataFrame(report_dict).transpose()
+                                             st.dataframe(report_df.style.format({'precision': '{:.2%}', 'recall': '{:.2%}', 'f1-score': '{:.2f}', 'support': '{:.0f}'}))
+
+                                             st.subheader("Macierz Pomyłek (KNN):")
+                                             fig_cm = px.imshow(cm, text_auto=True, labels=dict(x="Predykcja", y="Prawda"),
+                                                                x=['Niecelny (0)', 'Celny (1)'], y=['Niecelny (0)', 'Celny (1)'],
+                                                                title="Macierz Pomyłek KNN (na podziale testowym)")
+                                             st.plotly_chart(fig_cm, use_container_width=True)
+                                     except Exception as e_split:
+                                         st.error(f"Wystąpił błąd podczas oceny KNN na pojedynczym podziale: {e_split}")
+                        else:
+                            st.warning(f"Niewystarczająca ilość danych ({len(pmdc)}) dla gracza '{selected_player}' do zbudowania modelu KNN. Minimum wymagane: {min_samples_for_model}.")
+                else:
+                    st.warning(f"Brak wymaganych kolumn do zbudowania modelu dla gracza '{selected_player}'. Brakujące kolumny: {', '.join(missing_cols)}")
+            else:
+                st.warning(f"Brak danych dla gracza '{selected_player}' w wybranym typie sezonu '{selected_season_type}'.")
+        else:
+            st.info("Wybierz gracza z panelu bocznego, aby uruchomić ocenę modelu KNN.")
 
 
     elif st.session_state.active_view == "🎯 Ocena Modelu (XGBoost)":
-        # --- Prefiks dla kluczy w tym widoku: xgb_eval_ ---
+        # --- Prefiks dla kluczy widgetów w tym widoku: xgb_eval_ ---
         st.header(f"Ocena Modelu Predykcyjnego (XGBoost) dla: {selected_player}")
 
-        # === AKTUALIZACJA OPISU - wspominamy o ACTION_TYPE_SIMPLE ===
         st.markdown(f"""
         ### Interpretacja Wyników Modelu XGBoost ({selected_player})
 
-        Ta zakładka prezentuje model **XGBoost (Extreme Gradient Boosting)** do przewidywania wyniku rzutu (celny/niecelny), używając cech numerycznych (`LOC_X`, `LOC_Y`, `SHOT_DISTANCE`) oraz kategorycznych.
+        Ta zakładka prezentuje model **XGBoost (Extreme Gradient Boosting)** do przewidywania wyniku rzutu (celny/niecelny). Podobnie jak KNN, używa on tych samych cech wejściowych:
 
-        **Obsługa Cech Kategorycznych:**
+        * **Numeryczne:** `LOC_X`, `LOC_Y`, `SHOT_DISTANCE` (skalowane za pomocą `StandardScaler`).
+        * **Kategoryczne:** `ACTION_TYPE`/`ACTION_TYPE_SIMPLE`, `SHOT_TYPE`, `PERIOD` (przekształcone za pomocą `One-Hot Encoding`).
 
-        * Podobnie jak w KNN, cechy kategoryczne `SHOT_TYPE`, `PERIOD` oraz **uproszczony typ akcji (`ACTION_TYPE_SIMPLE`)** zostały przekształcone za pomocą **One-Hot Encoding (OHE)**.
-        * Cechy numeryczne są **skalowane** (`StandardScaler`).
-        * Zastosowano ten sam potok (`Pipeline`) przetwarzania co dla KNN.
+        Wykorzystano ten sam potok (`Pipeline`) przetwarzania danych co dla KNN, aby zapewnić spójność i umożliwić porównanie wyników. Wydajność modelu XGBoost jest oceniana na dwa sposoby:
 
-        **Ocena Wydajności i Interpretacja:**
+        **1. Walidacja Krzyżowa (Stratified K-Fold) - Ocena Ogólnej Wydajności:**
 
-        * **Walidacja Krzyżowa:** Ocena ogólnej wydajności modelu.
-        * **Pojedynczy Podział Trening/Test:** Szczegółowe metryki (Raport Klasyfikacji, Macierz Pomyłek).
-        * **Interpretacja SHAP:** Analiza ważności cech i ich wpływu na predykcje dla modelu XGBoost, wykorzystując wartości Shapleya.
+        * **Cel:** Uzyskanie **niezawodnej** oceny, jak dobrze model XGBoost generalizuje na nowych, niewidzianych danych.
+        * **Jak działa:** Dane gracza są dzielone na `n` części (folds). Model (potok z `ColumnTransformer` + `XGBClassifier`) jest trenowany `n` razy na `n-1` częściach i testowany na pozostałej.
+        * **Wyniki:** Średnia dokładność i odchylenie standardowe pokazują oczekiwaną skuteczność i stabilność modelu XGBoost.
 
-        Wyniki pokazują skuteczność XGBoost dla gracza `{selected_player}` oraz które cechy (w tym **uproszczony typ akcji**) miały największy wpływ na jego przewidywania.
+        **2. Ocena na Pojedynczym Podziale Trening/Test - Szczegółowa Analiza:**
+
+        * **Cel:** Zaprezentowanie **szczegółowych metryk** (Raport Klasyfikacji, Macierz Pomyłek) dla *jednego konkretnego* podziału danych, aby zrozumieć, jakie błędy popełnia model XGBoost.
+        * **Jak działa:** Dane są jednorazowo dzielone (zgodnie z wybranym procentem). Ten sam potok (`ColumnTransformer` + `XGBClassifier`) jest trenowany na zbiorze treningowym i oceniany na testowym.
+        * **Wyniki:** Dokładność, Raport Klasyfikacji i Macierz Pomyłek pokazują działanie modelu na tym konkretnym podziale.
+
+        **3. Interpretacja SHAP (Dodano w tej wersji):**
+
+        * **Cel:** Zrozumienie, **które cechy** miały największy wpływ na predykcje modelu i **w jaki sposób** wpływały (pozytywnie/negatywnie) na przewidywanie rzutu celnego.
+        * **Jak działa:** Używa biblioteki SHAP do obliczenia wartości Shapleya dla każdej cechy w danych testowych. Wartości te reprezentują "wkład" każdej cechy w końcową predykcję.
+        * **Wyniki:** Wykresy `summary_plot` (beeswarm i bar) wizualizują globalną ważność cech i kierunek ich wpływu. Dodatkowo, poniżej wykresów znajduje się **automatyczne podsumowanie** wskazujące najważniejszą cechę i jej ogólny wpływ.
+
+        **Podsumowanie:** XGBoost jest często potężniejszym algorytmem niż KNN, szczególnie na danych tabelarycznych, ale może wymagać więcej zasobów obliczeniowych. Porównaj wyniki z zakładki KNN, aby zobaczyć, który model lepiej sprawdza się dla danego gracza i zestawu danych. Pamiętaj, że wyniki na pojedynczym podziale mogą zależeć od losowości podziału (`random_state=42`). Analiza SHAP dostarcza dodatkowego wglądu w "czarną skrzynkę" modelu.
         """)
-        # === KONIEC AKTUALIZACJI OPISU ===
 
         if selected_player:
-            player_model_data = filter_data_by_player(selected_player, filtered_data) # Już zawiera ACTION_TYPE_SIMPLE
+            player_model_data = filter_data_by_player(selected_player, filtered_data) # Użyj danych przefiltrowanych wg sezonu
             if not player_model_data.empty:
+                # Definicja cech i zmiennej docelowej (analogicznie jak w KNN)
                 numerical_features = ['LOC_X', 'LOC_Y', 'SHOT_DISTANCE']
-                # Używamy ACTION_TYPE_SIMPLE
-                categorical_features = ['ACTION_TYPE_SIMPLE', 'SHOT_TYPE', 'PERIOD'] # <-- ZMIANA
+                action_type_col_model_xgb = 'ACTION_TYPE' # Domyślnie
+                if 'ACTION_TYPE_SIMPLE' in player_model_data.columns:
+                     use_simple_action_xgb = st.checkbox("Użyj uproszczonych typów akcji (ACTION_TYPE_SIMPLE) w modelu XGBoost?", value=True, key='xgb_eval_use_simple_action')
+                     if use_simple_action_xgb:
+                         action_type_col_model_xgb = 'ACTION_TYPE_SIMPLE'
+
+                categorical_features = [action_type_col_model_xgb, 'SHOT_TYPE', 'PERIOD']
                 target_variable = 'SHOT_MADE_FLAG'
                 all_features = numerical_features + categorical_features
 
-                # Sprawdzamy czy WSZYSTKIE potrzebne kolumny istnieją
-                if all(feat in player_model_data.columns for feat in all_features) and target_variable in player_model_data.columns:
+                missing_cols = [col for col in all_features + [target_variable] if col not in player_model_data.columns]
+                if not missing_cols:
+                    # Przygotowanie danych (identyczne jak dla KNN)
                     pmdc = player_model_data[all_features + [target_variable]].dropna().copy()
                     pmdc[target_variable] = pd.to_numeric(pmdc[target_variable], errors='coerce')
                     pmdc = pmdc.dropna(subset=[target_variable])
                     for col in categorical_features: pmdc[col] = pmdc[col].astype(str)
 
-                    if pmdc[target_variable].nunique() != 2 and not pmdc.empty:
-                        st.warning("Pozostała tylko jedna klasa wyniku rzutu. Nie można zbudować modelu.")
-                    elif pmdc.empty or len(pmdc) < 10:
-                        st.warning(f"Brak wystarczającej ilości ważnych danych ({len(pmdc)}) dla gracza '{selected_player}' do zbudowania modelu XGBoost.")
+                    if pmdc[target_variable].nunique() < 2 and not pmdc.empty:
+                        st.warning(f"Dla gracza '{selected_player}' pozostała tylko jedna klasa wyniku rzutu po przetworzeniu danych. Nie można zbudować modelu klasyfikacyjnego.")
+                    elif pmdc.empty:
+                        st.warning(f"Brak kompletnych danych (po usunięciu NaN) dla gracza '{selected_player}' do zbudowania modelu.")
                     else:
                         pmdc[target_variable] = pmdc[target_variable].astype(int)
-                        min_samples_for_model = 50 # Można dostosować
+                        min_samples_for_model = 50
                         if len(pmdc) >= min_samples_for_model:
                             st.subheader("Konfiguracja Oceny Modelu XGBoost")
-                            n_splits_xgb = st.slider("Liczba podziałów CV:", 3, min(10, len(pmdc)//2 if len(pmdc)>5 else 3), 5, 1, key='xgb_eval_cv_splits')
+                            # Slidery do konfiguracji (tylko CV i podział)
+                            n_splits_xgb = st.slider("Liczba podziałów CV:", 3, 10, 5, 1, key='xgb_eval_cv_splits')
                             st.markdown("---")
                             st.subheader("Konfiguracja Pojedynczego Podziału Testowego")
                             test_size_percent_xgb = st.slider("Rozmiar zbioru testowego (%):", 10, 50, 20, 5, key='xgb_eval_test_split', format="%d%%")
                             train_size_percent_xgb = 100 - test_size_percent_xgb
                             test_size_float_xgb = test_size_percent_xgb / 100.0
+
                             if st.button(f"Uruchom Ocenę Modelu XGBoost dla {selected_player}", key='xgb_eval_run_button'):
+                                # Definicja preprocesora i pipeline'u XGBoost (identyczny preprocesor jak w KNN)
                                 preprocessor = ColumnTransformer(
-                                    transformers=[('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'), categorical_features), # Używa nowej listy
-                                                  ('num', StandardScaler(), numerical_features)],
+                                    transformers=[
+                                        ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'), categorical_features),
+                                        ('num', StandardScaler(), numerical_features)],
                                     remainder='passthrough'
                                 )
                                 pipeline_xgb = Pipeline([
                                     ('preprocessor', preprocessor),
-                                    ('xgb', xgb.XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss'))
+                                    ('xgb', xgb.XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss')) # Użyj standardowych parametrów XGBoost
                                 ])
+
                                 X = pmdc[all_features]
                                 y = pmdc[target_variable]
 
-                                # Sprawdzenie czy mamy wystarczająco próbek dla CV
-                                if len(y.unique()) < 2:
-                                     st.error("Błąd: Tylko jedna klasa w danych. Nie można wykonać StratifiedKFold.")
-                                elif any(np.bincount(y) < n_splits_xgb):
-                                    st.error(f"Błąd: Liczba podziałów CV ({n_splits_xgb}) jest większa niż liczba próbek w najmniejszej klasie. Zmniejsz liczbę podziałów CV.")
-                                else:
-                                    st.markdown("---"); st.subheader(f"1. Wyniki {n_splits_xgb}-krotnej Walidacji Krzyżowej (XGBoost)")
-                                    with st.spinner(f"CV XGBoost (folds={n_splits_xgb})..."):
-                                        try:
-                                            cv_xgb = StratifiedKFold(n_splits=n_splits_xgb, shuffle=True, random_state=42)
-                                            scores_xgb = cross_val_score(pipeline_xgb, X, y, cv=cv_xgb, scoring='accuracy', n_jobs=-1)
-                                            st.success("CV XGBoost zakończona.")
-                                            st.metric("Średnia dokładność:", f"{scores_xgb.mean():.2%}")
-                                            st.metric("Odch. std.:", f"{scores_xgb.std():.4f}")
-                                            st.text("Foldy: " + ", ".join([f"{s:.2%}" for s in scores_xgb]))
-                                        except ValueError as ve:
-                                             if "less than n_splits" in str(ve):
-                                                 st.error(f"Błąd CV XGBoost: Liczba podziałów ({n_splits_xgb}) jest większa niż liczba próbek w jednej z klas. Zmniejsz liczbę podziałów CV.")
-                                             else:
-                                                 st.error(f"Błąd CV XGBoost (ValueError): {ve}")
-                                        except Exception as e: st.error(f"Błąd CV XGBoost: {e}")
+                                # 1. Walidacja Krzyżowa XGBoost
+                                st.markdown("---"); st.subheader(f"1. Wyniki {n_splits_xgb}-krotnej Walidacji Krzyżowej (XGBoost)")
+                                with st.spinner(f"Uruchamianie {n_splits_xgb}-krotnej walidacji krzyżowej XGBoost..."):
+                                    try:
+                                        cv_xgb = StratifiedKFold(n_splits=n_splits_xgb, shuffle=True, random_state=42)
+                                        scores_xgb = cross_val_score(pipeline_xgb, X, y, cv=cv_xgb, scoring='accuracy', n_jobs=-1)
+                                        st.success("Walidacja krzyżowa XGBoost zakończona.")
+                                        st.metric("Średnia dokładność (CV):", f"{scores_xgb.mean():.2%}")
+                                        st.metric("Odchylenie standardowe (CV):", f"{scores_xgb.std():.4f}")
+                                        st.text("Dokładności w poszczególnych foldach: " + ", ".join([f"{s:.2%}" for s in scores_xgb]))
+                                    except Exception as e_cv_xgb:
+                                        st.error(f"Wystąpił błąd podczas walidacji krzyżowej XGBoost: {e_cv_xgb}")
 
-                                    st.markdown("---"); st.subheader(f"2. Ocena XGBoost na Podziale ({train_size_percent_xgb}%/{test_size_percent_xgb}%)")
-                                    with st.spinner(f"Ocena XGBoost na podziale..."):
-                                        try:
-                                             # Sprawdzenie czy podział jest możliwy ze stratyfikacją
-                                            if len(y.unique()) < 2:
-                                                 st.error("Błąd: Tylko jedna klasa w danych. Nie można wykonać podziału trening/test.")
-                                            elif any(np.bincount(y) < 2):
-                                                 st.warning("Ostrzeżenie: Jedna z klas ma mniej niż 2 próbki. Wykonuję podział bez stratyfikacji.")
-                                                 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float_xgb, random_state=42, stratify=None)
-                                            else:
-                                                 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float_xgb, random_state=42, stratify=y)
+                                # 2. Ocena XGBoost na pojedynczym podziale
+                                st.markdown("---"); st.subheader(f"2. Ocena XGBoost na Podziale Trening/Test ({train_size_percent_xgb}%/{test_size_percent_xgb}%)")
+                                with st.spinner(f"Trenowanie i ocena XGBoost na pojedynczym podziale..."):
+                                     try:
+                                         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float_xgb, random_state=42, stratify=y)
+                                         if X_test.empty:
+                                             st.warning("Zbiór testowy jest pusty po podziale. Nie można przeprowadzić oceny.")
+                                         else:
+                                             # Trenowanie pipeline'u XGBoost
+                                             pipeline_xgb.fit(X_train, y_train)
+                                             # Predykcja
+                                             y_pred_xgb = pipeline_xgb.predict(X_test)
+                                             # Metryki
+                                             accuracy_xgb = accuracy_score(y_test, y_pred_xgb)
+                                             report_dict_xgb = classification_report(y_test, y_pred_xgb, target_names=['Niecelny', 'Celny'], output_dict=True, zero_division=0)
+                                             cm_xgb = confusion_matrix(y_test, y_pred_xgb)
 
-                                            if len(X_test) == 0: st.warning("Pusty zbiór testowy.")
-                                            elif len(X_train) == 0: st.warning("Pusty zbiór treningowy.")
-                                            else:
-                                                pipeline_xgb.fit(X_train, y_train)
-                                                y_pred_xgb = pipeline_xgb.predict(X_test)
-                                                accuracy_xgb = accuracy_score(y_test, y_pred_xgb)
-                                                report_dict_xgb = classification_report(y_test, y_pred_xgb, target_names=['Niecelny', 'Celny'], output_dict=True, zero_division=0)
-                                                cm_xgb = confusion_matrix(y_test, y_pred_xgb)
-                                                st.success("Ocena XGBoost zakończona.")
-                                                st.metric("Dokładność:", f"{accuracy_xgb:.2%}")
-                                                st.subheader("Raport Klasyfikacji (XGBoost):")
-                                                report_df_xgb = pd.DataFrame(report_dict_xgb).transpose()
-                                                st.dataframe(report_df_xgb.style.format({'precision': '{:.2%}', 'recall': '{:.2%}', 'f1-score': '{:.2f}', 'support': '{:.0f}'}))
-                                                st.subheader("Macierz Pomyłek (XGBoost):")
-                                                labels_cm_xgb = sorted(pd.concat([y_test, pd.Series(y_pred_xgb)]).unique())
-                                                labels_cm_names_xgb = ['Niecelny' if i == 0 else 'Celny' for i in labels_cm_xgb]
+                                             st.success("Ocena XGBoost na pojedynczym podziale zakończona.")
+                                             st.metric("Dokładność (na podziale testowym):", f"{accuracy_xgb:.2%}")
 
-                                                if len(labels_cm_xgb) == 2:
-                                                     fig_cm_xgb = px.imshow(cm_xgb, text_auto=True, labels=dict(x="Predykcja", y="Prawda"), x=labels_cm_names_xgb, y=labels_cm_names_xgb, title="Macierz Pomyłek XGBoost", color_continuous_scale=px.colors.sequential.Greens)
-                                                else:
-                                                     fig_cm_xgb = px.imshow(cm_xgb, text_auto=True, title=f"Macierz Pomyłek XGBoost (tylko klasa: {labels_cm_names_xgb[0]})", color_continuous_scale=px.colors.sequential.Greens)
+                                             st.subheader("Raport Klasyfikacji (XGBoost):")
+                                             report_df_xgb = pd.DataFrame(report_dict_xgb).transpose()
+                                             st.dataframe(report_df_xgb.style.format({'precision': '{:.2%}', 'recall': '{:.2%}', 'f1-score': '{:.2f}', 'support': '{:.0f}'}))
 
-                                                st.plotly_chart(fig_cm_xgb, use_container_width=True)
+                                             st.subheader("Macierz Pomyłek (XGBoost):")
+                                             fig_cm_xgb = px.imshow(cm_xgb, text_auto=True, labels=dict(x="Predykcja", y="Prawda"),
+                                                                    x=['Niecelny (0)', 'Celny (1)'], y=['Niecelny (0)', 'Celny (1)'],
+                                                                    title="Macierz Pomyłek XGBoost (na podziale testowym)",
+                                                                    color_continuous_scale=px.colors.sequential.Greens) # Inna skala kolorów dla odróżnienia
+                                             st.plotly_chart(fig_cm_xgb, use_container_width=True)
 
-                                                # === SEKCJA SHAP ===
-                                                st.markdown("---")
-                                                st.subheader("3. Interpretacja Modelu XGBoost (SHAP)")
-                                                st.caption("Analiza wpływu cech na predykcje (dane testowe).")
-                                                # Zmniejszamy liczbę próbek dla SHAP, jeśli jest ich dużo, aby przyspieszyć
-                                                shap_sample_size = min(len(X_test), 500)
-                                                if shap_sample_size < len(X_test):
-                                                     st.info(f"Analiza SHAP zostanie przeprowadzona na próbce {shap_sample_size} punktów z danych testowych dla przyspieszenia obliczeń.")
-                                                     shap_indices = np.random.choice(X_test.index, shap_sample_size, replace=False)
-                                                     X_test_shap = X_test.loc[shap_indices]
-                                                else:
-                                                     X_test_shap = X_test
+                                             # === SEKCJA SHAP ===
+                                             st.markdown("---")
+                                             st.subheader("3. Interpretacja Modelu XGBoost (SHAP)")
+                                             st.caption("Analiza wpływu cech na predykcje (dane testowe).")
+                                             with st.spinner("Obliczanie wartości SHAP..."):
+                                                 try:
+                                                     # Pobierz wytrenowany model i preprocesor z pipeline'u
+                                                     model = pipeline_xgb.named_steps['xgb']
+                                                     preprocessor_fitted = pipeline_xgb.named_steps['preprocessor']
 
-                                                with st.spinner(f"Obliczanie wartości SHAP dla {len(X_test_shap)} próbek..."):
-                                                    try:
-                                                        model_xgb_fitted = pipeline_xgb.named_steps['xgb']
-                                                        preprocessor_fitted = pipeline_xgb.named_steps['preprocessor']
-                                                        # Używamy TreeExplainer dla XGBoost
-                                                        explainer = shap.TreeExplainer(model_xgb_fitted, feature_perturbation="tree_path_dependent") # Lepsze dla korelacji
+                                                     # Utwórz explainer SHAP dla modelu drzewiastego
+                                                     explainer = shap.TreeExplainer(model)
 
-                                                        # Transformujemy dane testowe (lub próbkę) używane przez SHAP
-                                                        X_test_transformed_shap = preprocessor_fitted.transform(X_test_shap)
-                                                        # Pobieramy nazwy cech PO transformacji (OHE tworzy nowe)
-                                                        try:
-                                                             feature_names_out = preprocessor_fitted.get_feature_names_out()
-                                                             feature_names_out = [str(fn) for fn in feature_names_out] # Upewnijmy się, że to stringi
-                                                        except AttributeError: # Starsze wersje sklearn mogą nie mieć get_feature_names_out
-                                                            # Próba ręcznego odtworzenia nazw (może być mniej dokładna)
-                                                            ohe_features = preprocessor_fitted.transformers_[0][1].get_feature_names_out(categorical_features)
-                                                            num_features = numerical_features
-                                                            feature_names_out = list(ohe_features) + list(num_features)
-                                                            st.warning("Użyto starszej metody do pobrania nazw cech po OHE.")
+                                                     # Przetransformuj dane testowe za pomocą dopasowanego preprocesora
+                                                     X_test_transformed = preprocessor_fitted.transform(X_test)
+                                                     feature_names_out = preprocessor_fitted.get_feature_names_out()
+                                                     feature_names_out = [str(fn) for fn in feature_names_out] # Konwersja na stringi
 
+                                                     # Oblicz wartości SHAP
+                                                     shap_values = explainer.shap_values(X_test_transformed)
 
-                                                        # Obliczamy wartości SHAP dla próbek
-                                                        shap_values = explainer.shap_values(X_test_transformed_shap)
+                                                     # Wybierz wartości SHAP dla klasy pozytywnej (1 - 'Celny')
+                                                     if isinstance(shap_values, list) and len(shap_values) == 2:
+                                                         shap_values_for_plot = shap_values[1]
+                                                         # st.info("Interpretacja SHAP dla klasy pozytywnej (rzut celny).") # Mniej gadatliwe
+                                                     else:
+                                                         shap_values_for_plot = shap_values
+                                                         # st.info("Interpretacja SHAP (zakładając wpływ na wynik pozytywny).")
 
-                                                        # Dla klasyfikacji binarnej, shap_values może być listą [shap_dla_klasy_0, shap_dla_klasy_1]
-                                                        # Zwykle interesuje nas wpływ na klasę pozytywną (1 - Celny)
-                                                        shap_values_for_plot = shap_values
+                                                     # Stwórz DataFrame z przekształconymi danymi (potrzebne do summary_plot)
+                                                     X_test_transformed_df = pd.DataFrame(X_test_transformed, columns=feature_names_out)
 
-                                                        # Tworzymy DataFrame z przetransformowanych danych dla lepszych etykiet w SHAP
-                                                        X_test_transformed_df_shap = pd.DataFrame(X_test_transformed_shap, columns=feature_names_out, index=X_test_shap.index)
+                                                     # Wykres Beeswarm
+                                                     st.markdown("#### Globalna Ważność Cech (Summary Plot - Beeswarm)")
+                                                     st.markdown("Pozycja X: Wpływ na predykcję 'Celny' (wyższe SHAP = większa szansa). Kolor: Wartość cechy (Czerwony=Wysoka, Niebieski=Niska).")
+                                                     fig_summary, ax_summary = plt.subplots()
+                                                     shap.summary_plot(shap_values_for_plot, X_test_transformed_df, feature_names=feature_names_out, show=False, plot_type="beeswarm")
+                                                     st.pyplot(fig_summary, bbox_inches='tight')
+                                                     plt.clf() # Wyczyść figurę
 
+                                                     # Wykres Bar (średnia abs. wartość SHAP)
+                                                     st.markdown("#### Średnia Absolutna Wartość SHAP (Ważność Cech - Bar)")
+                                                     fig_bar, ax_bar = plt.subplots()
+                                                     shap.summary_plot(shap_values_for_plot, X_test_transformed_df, feature_names=feature_names_out, show=False, plot_type="bar")
+                                                     st.pyplot(fig_bar, bbox_inches='tight')
+                                                     plt.clf() # Wyczyść figurę
 
-                                                        st.markdown("#### Globalna Ważność Cech (Summary Plot - Beeswarm)")
-                                                        st.markdown("Pozycja X: Wpływ wartości SHAP na predykcję 'Celny'. Kolor: Wartość cechy (Czerwony=Wysoka, Niebieski=Niska).")
-                                                        fig_summary_beeswarm, ax_summary_beeswarm = plt.subplots()
-                                                        # shap.summary_plot(shap_values_for_plot, X_test_transformed_df_shap, feature_names=feature_names_out, show=False, plot_type="beeswarm")
-                                                        shap.summary_plot(shap_values_for_plot, X_test_transformed_df_shap, show=False, plot_type="beeswarm") # Automatycznie używa nazw kolumn z DataFrame
-                                                        plt.title("SHAP Summary Plot (Beeswarm)")
-                                                        plt.xlabel("Wartość SHAP (wpływ na predykcję 'Celny')")
-                                                        st.pyplot(fig_summary_beeswarm, bbox_inches='tight', use_container_width=True)
-                                                        plt.clf() # Wyczyść figurę plt
+                                                     # --- POCZĄTEK: Dodana sekcja interpretacji ---
+                                                     try:
+                                                         st.markdown("---")
+                                                         st.markdown("##### Podsumowanie Interpretacji SHAP")
 
-                                                        st.markdown("#### Średnia Absolutna Wartość SHAP (Ważność Cech - Bar)")
-                                                        fig_summary_bar, ax_summary_bar = plt.subplots()
-                                                        # shap.summary_plot(shap_values_for_plot, X_test_transformed_df_shap, feature_names=feature_names_out, show=False, plot_type="bar")
-                                                        shap.summary_plot(shap_values_for_plot, X_test_transformed_df_shap, show=False, plot_type="bar")
-                                                        plt.title("SHAP Mean Absolute Value (Feature Importance)")
-                                                        plt.xlabel("Średnia |Wartość SHAP| (średni wpływ na model)")
-                                                        st.pyplot(fig_summary_bar, bbox_inches='tight', use_container_width=True)
-                                                        plt.clf() # Wyczyść figurę plt
+                                                         # 1. Oblicz średnią absolutną wartość SHAP dla rankingu ważności
+                                                         mean_abs_shap = np.abs(shap_values_for_plot).mean(axis=0)
 
-                                                    except Exception as e_shap: st.error(f"Błąd podczas obliczania lub rysowania SHAP: {e_shap}")
-                                                # === KONIEC SEKCJI SHAP ===
-                                        except Exception as e: st.error(f"Błąd oceny XGBoost: {e}")
-                        else: st.warning(f"Niewystarczająca ilość danych ({len(pmdc)}) dla XGBoost po usunięciu NaN. Minimum: {min_samples_for_model}.")
-                else: st.warning(f"Brak wymaganych kolumn (w tym ACTION_TYPE_SIMPLE) dla '{selected_player}'. Nie można zbudować modelu.")
-            else: st.warning(f"Brak danych dla gracza '{selected_player}'.")
-        else: st.info("Wybierz gracza do oceny XGBoost.")
+                                                         # 2. Stwórz DataFrame ważności cech
+                                                         feature_importance_df = pd.DataFrame({
+                                                             'feature': feature_names_out,
+                                                             'importance': mean_abs_shap
+                                                         }).sort_values(by='importance', ascending=False).reset_index(drop=True)
 
+                                                         if not feature_importance_df.empty:
+                                                             # 3. Pobierz najważniejszą cechę
+                                                             top_feature_name = feature_importance_df.loc[0, 'feature']
+                                                             top_feature_importance = feature_importance_df.loc[0, 'importance']
+
+                                                             # 4. Spróbuj określić ogólny kierunek wpływu (heurystyka korelacji)
+                                                             comment = f"Dla gracza **{selected_player}**, najważniejszą cechą wpływającą na predykcję wyniku rzutu przez model XGBoost była **`{top_feature_name}`** (średni abs. wpływ SHAP: {top_feature_importance:.3f})."
+                                                             try:
+                                                                 # Znajdź indeks cechy w oryginalnej liście (dla spójności)
+                                                                 # Musimy użyć listy, bo feature_names_out może być numpy array
+                                                                 top_feature_original_index = list(feature_names_out).index(top_feature_name)
+
+                                                                 # Pobierz wartości tej cechy z przekształconych danych testowych
+                                                                 top_feature_values = X_test_transformed_df[top_feature_name].values
+                                                                 # Pobierz wartości SHAP dla tej cechy (dla klasy pozytywnej)
+                                                                 top_feature_shap_values = shap_values_for_plot[:, top_feature_original_index]
+
+                                                                 # Oblicz korelację, upewniając się, że dane mają wariancję
+                                                                 correlation = np.nan # Domyślnie NaN
+                                                                 # Użyj małego progu dla std dev, aby uniknąć dzielenia przez zero
+                                                                 if len(top_feature_values) > 1 and len(top_feature_shap_values) > 1 and np.std(top_feature_values) > 1e-6 and np.std(top_feature_shap_values) > 1e-6:
+                                                                      correlation = np.corrcoef(top_feature_values, top_feature_shap_values)[0, 1]
+
+                                                                 if not np.isnan(correlation):
+                                                                     impact_description = ""
+                                                                     # Sprawdź, czy cecha jest prawdopodobnie numeryczna (prosty test)
+                                                                     # UWAGA: To uproszczenie!
+                                                                     is_numerical_heuristic = any(num_feat in top_feature_name for num_feat in numerical_features)
+
+                                                                     if correlation < -0.1: # Istotna negatywna korelacja
+                                                                         if is_numerical_heuristic:
+                                                                             impact_description = f" Generalnie, **wyższe wartości** tej cechy (np. większa odległość) **zmniejszają** przewidywaną szansę na trafienie (niższe SHAP)."
+                                                                         else: # Prawdopodobnie cecha OHE
+                                                                             impact_description = f" Obecność tej cechy (wartość 1) generalnie **zmniejsza** przewidywaną szansę na trafienie (niższe SHAP)."
+                                                                     elif correlation > 0.1: # Istotna pozytywna korelacja
+                                                                          if is_numerical_heuristic:
+                                                                              impact_description = f" Generalnie, **wyższe wartości** tej cechy **zwiększają** przewidywaną szansę na trafienie (wyższe SHAP)."
+                                                                          else: # Prawdopodobnie cecha OHE
+                                                                              impact_description = f" Obecność tej cechy (wartość 1) generalnie **zwiększa** przewidywaną szansę na trafienie (wyższe SHAP)."
+                                                                     else: # Słaba korelacja
+                                                                          impact_description = " Kierunek jej wpływu wydaje się być zróżnicowany lub słaby w ogólnym ujęciu."
+
+                                                                     comment += impact_description
+                                                                 else:
+                                                                      comment += " Nie udało się jednoznacznie określić ogólnego kierunku wpływu tej cechy (np. z powodu braku wariancji lub błędu obliczeń)."
+
+                                                             except IndexError:
+                                                                  comment += f" Nie udało się znaleźć indeksu dla cechy '{top_feature_name}'."
+                                                             except Exception as e_corr:
+                                                                 # Błąd podczas próby analizy korelacji
+                                                                 comment += f" Nie udało się określić kierunku wpływu (wystąpił błąd: {e_corr})."
+
+                                                             st.caption(comment) # Wyświetl podsumowanie jako podpis
+                                                         else:
+                                                             st.caption("Nie znaleziono ważnych cech w analizie SHAP.")
+
+                                                     except Exception as e_interp:
+                                                         st.warning(f"Wystąpił błąd podczas generowania tekstowej interpretacji SHAP: {e_interp}")
+                                                     # --- KONIEC: Dodana sekcja interpretacji ---
+
+                                                 except ImportError:
+                                                     st.error("Biblioteka SHAP lub Matplotlib nie jest zainstalowana. Zainstaluj `shap` i `matplotlib`, aby zobaczyć interpretację modelu.")
+                                                 except Exception as e_shap:
+                                                     st.error(f"Wystąpił błąd podczas obliczania lub wizualizacji SHAP: {e_shap}")
+                                             # === KONIEC SEKCJI SHAP ===
+
+                                     except Exception as e_split_xgb:
+                                         st.error(f"Wystąpił błąd podczas oceny XGBoost na pojedynczym podziale: {e_split_xgb}")
+                        else:
+                            st.warning(f"Niewystarczająca ilość danych ({len(pmdc)}) dla gracza '{selected_player}' do zbudowania modelu XGBoost. Minimum wymagane: {min_samples_for_model}.")
+                else:
+                    st.warning(f"Brak wymaganych kolumn do zbudowania modelu dla gracza '{selected_player}'. Brakujące kolumny: {', '.join(missing_cols)}")
+            else:
+                st.warning(f"Brak danych dla gracza '{selected_player}' w wybranym typie sezonu '{selected_season_type}'.")
+        else:
+            st.info("Wybierz gracza z panelu bocznego, aby uruchomić ocenę modelu XGBoost.")
 
     elif st.session_state.active_view == "📊 Porównanie Modeli (KNN vs XGBoost)":
-        # --- Prefiks dla kluczy w tym widoku: model_comp_ ---
+        # --- Prefiks dla kluczy widgetów w tym widoku: model_comp_ ---
         st.header(f"Porównanie Modeli Predykcyjnych (KNN vs XGBoost) dla: {selected_player}")
 
-        # === AKTUALIZACJA OPISU ===
         st.markdown(f"""
-        Porównanie wyników modeli KNN i XGBoost dla gracza **{selected_player}** na tych samych danych treningowych i testowych.
-        Oba modele wykorzystują te same cechy wejściowe, w tym **uproszczony typ akcji (`ACTION_TYPE_SIMPLE`)**, oraz ten sam potok przetwarzania wstępnego (One-Hot Encoding dla kategorii, StandardScaler dla numerycznych).
+        Ta zakładka pozwala na bezpośrednie porównanie wydajności modeli KNN i XGBoost dla wybranego gracza: **{selected_player}**.
+        Używane są te same dane wejściowe i ten sam potok przetwarzania wstępnego (skalowanie cech numerycznych, One-Hot Encoding cech kategorycznych) dla obu modeli, aby zapewnić uczciwe porównanie.
 
         Porównywane są:
-        * **Średnia dokładność z Walidacji Krzyżowej:** Bardziej stabilna ocena ogólnej wydajności.
-        * **Dokładność i Macierz Pomyłek na Pojedynczym Podziale Testowym:** Bezpośrednie porównanie na konkretnym zestawie danych testowych.
+        * **Średnia dokładność z walidacji krzyżowej:** Daje obraz ogólnej stabilności i zdolności generalizacji obu modeli.
+        * **Dokładność na pojedynczym podziale testowym:** Pokazuje wydajność na konkretnym, tym samym dla obu modeli, zbiorze testowym.
+        * **Macierze pomyłek na podziale testowym:** Pozwalają wizualnie porównać typy błędów popełnianych przez oba modele.
+
+        Pamiętaj, że wyniki na pojedynczym podziale mogą zależeć od losowego podziału danych (`random_state=42`). Walidacja krzyżowa daje bardziej wiarygodny obraz ogólnej wydajności.
         """)
-        # === KONIEC AKTUALIZACJI OPISU ===
 
         if selected_player:
-             player_model_data = filter_data_by_player(selected_player, filtered_data) # Ma ACTION_TYPE_SIMPLE
-             if not player_model_data.empty:
+            player_model_data = filter_data_by_player(selected_player, filtered_data) # Użyj danych przefiltrowanych wg sezonu
+            if not player_model_data.empty:
+                 # Definicja cech (identyczna jak w poprzednich zakładkach)
                 numerical_features = ['LOC_X', 'LOC_Y', 'SHOT_DISTANCE']
-                # Używamy ACTION_TYPE_SIMPLE
-                categorical_features = ['ACTION_TYPE_SIMPLE', 'SHOT_TYPE', 'PERIOD'] # <-- ZMIANA
+                # Użyj tej samej logiki wyboru kolumny akcji jak w KNN/XGBoost
+                action_type_col_model_comp = 'ACTION_TYPE' # Domyślnie
+                if 'ACTION_TYPE_SIMPLE' in player_model_data.columns:
+                     # Dodaj checkbox, aby użytkownik mógł wybrać spójnie
+                     use_simple_action_comp = st.checkbox("Użyj uproszczonych typów akcji w obu modelach do porównania?", value=True, key='comp_model_use_simple_action')
+                     if use_simple_action_comp:
+                         action_type_col_model_comp = 'ACTION_TYPE_SIMPLE'
+
+                categorical_features = [action_type_col_model_comp, 'SHOT_TYPE', 'PERIOD']
                 target_variable = 'SHOT_MADE_FLAG'
                 all_features = numerical_features + categorical_features
 
-                # Sprawdzamy czy WSZYSTKIE potrzebne kolumny istnieją
-                if all(feat in player_model_data.columns for feat in all_features) and target_variable in player_model_data.columns:
+                missing_cols = [col for col in all_features + [target_variable] if col not in player_model_data.columns]
+                if not missing_cols:
+                    # Przygotowanie danych
                     pmdc = player_model_data[all_features + [target_variable]].dropna().copy()
                     pmdc[target_variable] = pd.to_numeric(pmdc[target_variable], errors='coerce')
                     pmdc = pmdc.dropna(subset=[target_variable])
                     for col in categorical_features: pmdc[col] = pmdc[col].astype(str)
 
-                    if pmdc[target_variable].nunique() != 2 and not pmdc.empty:
-                        st.warning("Pozostała tylko jedna klasa wyniku rzutu. Nie można porównać modeli.")
-                    elif pmdc.empty or len(pmdc) < 10:
-                        st.warning(f"Brak wystarczającej ilości ważnych danych ({len(pmdc)}) dla gracza '{selected_player}' do porównania modeli.")
+                    if pmdc[target_variable].nunique() < 2 and not pmdc.empty:
+                        st.warning(f"Dla gracza '{selected_player}' pozostała tylko jedna klasa wyniku rzutu. Nie można porównać modeli.")
+                    elif pmdc.empty:
+                        st.warning(f"Brak kompletnych danych dla gracza '{selected_player}' do porównania modeli.")
                     else:
                         pmdc[target_variable] = pmdc[target_variable].astype(int)
                         min_samples_for_model = 50
                         if len(pmdc) >= min_samples_for_model:
                             st.subheader("Konfiguracja Porównania Modeli")
-                            max_k_comp = max(3, min(25, len(pmdc)//3))
-                            if max_k_comp < 3: max_k_comp = 3
-                            default_k_comp = min(5, max_k_comp)
-                            k_comp = st.slider("Liczba sąsiadów (k dla KNN):", 3, max_k_comp, default_k_comp, 1, key='model_comp_knn_k')
-
-                            n_splits_comp = st.slider("Liczba podziałów CV:", 3, min(10, len(pmdc)//2 if len(pmdc)>5 else 3), 5, 1, key='model_comp_cv_splits')
+                            # Wspólne parametry dla obu modeli
+                            k_comp = st.slider("Liczba sąsiadów (k dla KNN):", 3, min(25, len(pmdc)//3), 5, 2, key='model_comp_knn_k')
+                            n_splits_comp = st.slider("Liczba podziałów CV:", 3, 10, 5, 1, key='model_comp_cv_splits')
                             test_size_percent_comp = st.slider("Rozmiar zbioru testowego (%):", 10, 50, 20, 5, key='model_comp_test_split', format="%d%%")
                             train_size_percent_comp = 100 - test_size_percent_comp
                             test_size_float_comp = test_size_percent_comp / 100.0
+
                             if st.button(f"Uruchom Porównanie KNN vs XGBoost dla {selected_player}", key='model_comp_run_button'):
                                 X = pmdc[all_features]; y = pmdc[target_variable]
+                                # Podział na zbiór treningowy i testowy (ten sam dla obu modeli)
+                                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float_comp, random_state=42, stratify=y)
 
-                                # Sprawdzenie warunków do podziału i CV
-                                if len(y.unique()) < 2:
-                                     st.error("Błąd: Tylko jedna klasa w danych. Nie można wykonać porównania.")
-                                elif any(np.bincount(y) < max(2, n_splits_comp)): # Potrzebujemy min 2 próbki i min n_splits próbek w każdej klasie
-                                     st.error(f"Błąd: Niewystarczająca liczba próbek w jednej z klas ({np.bincount(y)}) do wykonania podziału ({test_size_percent_comp}%) lub CV ({n_splits_comp} folds).")
+                                if X_test.empty:
+                                    st.error("Zbiór testowy jest pusty po podziale. Nie można porównać modeli.")
                                 else:
-                                     # Podział danych - tylko raz dla obu modeli
-                                     # Stratyfikacja jest domyślnie włączona, jeśli obie klasy mają wystarczająco próbek
-                                     try:
-                                         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float_comp, random_state=42, stratify=y)
-                                     except ValueError: # Jeśli stratyfikacja niemożliwa mimo sprawdzenia bincount (rzadkie)
-                                         st.warning("Stratyfikacja niemożliwa, wykonuję podział losowy.")
-                                         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size_float_comp, random_state=42, stratify=None)
+                                    # Definicja preprocesora (ten sam dla obu)
+                                    preprocessor = ColumnTransformer(
+                                        transformers=[
+                                            ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'), categorical_features),
+                                            ('num', StandardScaler(), numerical_features)],
+                                        remainder='passthrough'
+                                    )
+                                    # Definicja pipeline'ów
+                                    pipeline_knn = Pipeline([('preprocessor', preprocessor), ('knn', KNeighborsClassifier(n_neighbors=k_comp))])
+                                    pipeline_xgb = Pipeline([('preprocessor', preprocessor), ('xgb', xgb.XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss'))])
 
-                                     if len(X_test) == 0 or len(X_train) == 0: st.error("Pusty zbiór testowy lub treningowy. Nie można porównać.")
-                                     else:
-                                        preprocessor = ColumnTransformer(
-                                            transformers=[('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'), categorical_features), # Używa nowej listy
-                                                          ('num', StandardScaler(), numerical_features)], remainder='passthrough'
-                                        )
-                                        pipeline_knn = Pipeline([('preprocessor', preprocessor), ('knn', KNeighborsClassifier(n_neighbors=k_comp))])
-                                        pipeline_xgb = Pipeline([('preprocessor', preprocessor), ('xgb', xgb.XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss'))])
-                                        results = {"knn": {}, "xgb": {}}
+                                    results = {"knn": {}, "xgb": {}} # Słownik na wyniki
 
-                                        st.markdown("---"); st.subheader(f"Porównanie Walidacji Krzyżowej ({n_splits_comp} folds)")
-                                        col_cv1, col_cv2 = st.columns(2)
-                                        # --- CV KNN ---
-                                        with col_cv1:
-                                            st.markdown("**KNN**")
-                                            with st.spinner(f"CV KNN..."):
-                                                try:
-                                                    cv_knn = StratifiedKFold(n_splits=n_splits_comp, shuffle=True, random_state=42)
-                                                    scores_knn = cross_val_score(pipeline_knn, X, y, cv=cv_knn, scoring='accuracy', n_jobs=-1)
-                                                    results["knn"]["cv_mean"] = scores_knn.mean(); results["knn"]["cv_std"] = scores_knn.std()
-                                                    st.metric("Średnia Dokł.:", f"{results['knn']['cv_mean']:.2%}"); st.metric("Odch. Std.:", f"{results['knn']['cv_std']:.4f}")
-                                                except Exception as e: results["knn"]["cv_mean"] = "Błąd"; st.error(f"Błąd CV KNN: {e}")
-                                        # --- CV XGBoost ---
-                                        with col_cv2:
-                                            st.markdown("**XGBoost**")
-                                            with st.spinner(f"CV XGBoost..."):
-                                                try:
-                                                    cv_xgb = StratifiedKFold(n_splits=n_splits_comp, shuffle=True, random_state=42)
-                                                    scores_xgb = cross_val_score(pipeline_xgb, X, y, cv=cv_xgb, scoring='accuracy', n_jobs=-1)
-                                                    results["xgb"]["cv_mean"] = scores_xgb.mean(); results["xgb"]["cv_std"] = scores_xgb.std()
-                                                    st.metric("Średnia Dokł.:", f"{results['xgb']['cv_mean']:.2%}"); st.metric("Odch. Std.:", f"{results['xgb']['cv_std']:.4f}")
-                                                except Exception as e: results["xgb"]["cv_mean"] = "Błąd"; st.error(f"Błąd CV XGBoost: {e}")
+                                    # Porównanie Walidacji Krzyżowej
+                                    st.markdown("---"); st.subheader(f"Porównanie Walidacji Krzyżowej ({n_splits_comp} folds)")
+                                    col_cv1, col_cv2 = st.columns(2)
+                                    with col_cv1:
+                                        st.markdown(f"**KNN (k={k_comp})**")
+                                        with st.spinner(f"CV KNN..."):
+                                            try:
+                                                cv_knn = StratifiedKFold(n_splits=n_splits_comp, shuffle=True, random_state=42)
+                                                scores_knn = cross_val_score(pipeline_knn, X, y, cv=cv_knn, scoring='accuracy', n_jobs=-1)
+                                                results["knn"]["cv_mean"] = scores_knn.mean(); results["knn"]["cv_std"] = scores_knn.std()
+                                                st.metric("Średnia Dokł.:", f"{results['knn']['cv_mean']:.2%}"); st.metric("Odch. Std.:", f"{results['knn']['cv_std']:.4f}")
+                                            except Exception as e: results["knn"]["cv_mean"] = "Błąd"; st.error(f"Błąd CV KNN: {e}")
+                                    with col_cv2:
+                                        st.markdown("**XGBoost**")
+                                        with st.spinner(f"CV XGBoost..."):
+                                            try:
+                                                cv_xgb = StratifiedKFold(n_splits=n_splits_comp, shuffle=True, random_state=42)
+                                                scores_xgb = cross_val_score(pipeline_xgb, X, y, cv=cv_xgb, scoring='accuracy', n_jobs=-1)
+                                                results["xgb"]["cv_mean"] = scores_xgb.mean(); results["xgb"]["cv_std"] = scores_xgb.std()
+                                                st.metric("Średnia Dokł.:", f"{results['xgb']['cv_mean']:.2%}"); st.metric("Odch. Std.:", f"{results['xgb']['cv_std']:.4f}")
+                                            except Exception as e: results["xgb"]["cv_mean"] = "Błąd"; st.error(f"Błąd CV XGBoost: {e}")
 
-                                        st.markdown("---"); st.subheader(f"Porównanie na Podziale Testowym ({test_size_percent_comp}%)")
-                                        col_s1, col_s2 = st.columns(2)
-                                        # --- Ocena KNN na podziale ---
-                                        with col_s1:
-                                            st.markdown("**KNN**")
-                                            with st.spinner("Ocena KNN..."):
-                                                try:
-                                                    pipeline_knn.fit(X_train, y_train)
-                                                    y_pred_knn = pipeline_knn.predict(X_test)
-                                                    results["knn"]["single_acc"] = accuracy_score(y_test, y_pred_knn)
-                                                    results["knn"]["conf_matrix"] = confusion_matrix(y_test, y_pred_knn)
-                                                    st.metric("Dokładność:", f"{results['knn']['single_acc']:.2%}")
+                                    # Porównanie na Podziale Testowym
+                                    st.markdown("---"); st.subheader(f"Porównanie na Podziale Testowym ({test_size_percent_comp}%)")
+                                    st.caption(f"Porównanie na {len(y_test)} próbkach testowych.")
+                                    col_s1, col_s2 = st.columns(2)
+                                    with col_s1:
+                                        st.markdown(f"**KNN (k={k_comp})**")
+                                        with st.spinner("Ocena KNN..."):
+                                            try:
+                                                pipeline_knn.fit(X_train, y_train)
+                                                y_pred_knn = pipeline_knn.predict(X_test)
+                                                results["knn"]["single_acc"] = accuracy_score(y_test, y_pred_knn)
+                                                results["knn"]["conf_matrix"] = confusion_matrix(y_test, y_pred_knn)
+                                                st.metric("Dokładność:", f"{results['knn']['single_acc']:.2%}")
+                                                fig_cm_knn = px.imshow(results["knn"]["conf_matrix"], text_auto=True, x=['N(0)', 'C(1)'], y=['N(0)', 'C(1)'], title=f"Macierz Pomyłek KNN")
+                                                fig_cm_knn.update_layout(height=300, title_font_size=14); st.plotly_chart(fig_cm_knn, use_container_width=True)
+                                            except Exception as e: results["knn"]["single_acc"] = "Błąd"; st.error(f"Błąd oceny KNN: {e}")
+                                    with col_s2:
+                                        st.markdown("**XGBoost**")
+                                        with st.spinner("Ocena XGBoost..."):
+                                            try:
+                                                pipeline_xgb.fit(X_train, y_train)
+                                                y_pred_xgb = pipeline_xgb.predict(X_test)
+                                                results["xgb"]["single_acc"] = accuracy_score(y_test, y_pred_xgb)
+                                                results["xgb"]["conf_matrix"] = confusion_matrix(y_test, y_pred_xgb)
+                                                st.metric("Dokładność:", f"{results['xgb']['single_acc']:.2%}")
+                                                fig_cm_xgb = px.imshow(results["xgb"]["conf_matrix"], text_auto=True, x=['N(0)', 'C(1)'], y=['N(0)', 'C(1)'], title="Macierz Pomyłek XGBoost", color_continuous_scale=px.colors.sequential.Greens)
+                                                fig_cm_xgb.update_layout(height=300, title_font_size=14); st.plotly_chart(fig_cm_xgb, use_container_width=True)
+                                            except Exception as e: results["xgb"]["single_acc"] = "Błąd"; st.error(f"Błąd oceny XGBoost: {e}")
 
-                                                    labels_cm_knn = sorted(pd.concat([y_test, pd.Series(y_pred_knn)]).unique())
-                                                    labels_cm_names_knn = ['Niecelny' if i == 0 else 'Celny' for i in labels_cm_knn]
-                                                    if len(labels_cm_knn)==2:
-                                                        fig_cm_knn = px.imshow(results["knn"]["conf_matrix"], text_auto=True, x=labels_cm_names_knn, y=labels_cm_names_knn, title=f"CM KNN (k={k_comp})")
-                                                    else:
-                                                         fig_cm_knn = px.imshow(results["knn"]["conf_matrix"], text_auto=True, title=f"CM KNN (k={k_comp}, tylko klasa: {labels_cm_names_knn[0]})")
+                                    # Podsumowanie porównania
+                                    st.markdown("---"); st.subheader("Podsumowanie Porównania")
+                                    summary_data = {
+                                        'Metryka': ['Śr. Dokładność (CV)', 'Dokładność (Test)'],
+                                        'KNN': [f"{results['knn'].get('cv_mean', 'N/A'):.2%}" if isinstance(results['knn'].get('cv_mean'), float) else "N/A",
+                                                f"{results['knn'].get('single_acc', 'N/A'):.2%}" if isinstance(results['knn'].get('single_acc'), float) else "N/A"],
+                                        'XGBoost': [f"{results['xgb'].get('cv_mean', 'N/A'):.2%}" if isinstance(results['xgb'].get('cv_mean'), float) else "N/A",
+                                                    f"{results['xgb'].get('single_acc', 'N/A'):.2%}" if isinstance(results['xgb'].get('single_acc'), float) else "N/A"]
+                                    }
+                                    summary_df = pd.DataFrame(summary_data)
+                                    st.dataframe(summary_df, hide_index=True, use_container_width=True)
 
-                                                    fig_cm_knn.update_layout(height=300, title_font_size=14); st.plotly_chart(fig_cm_knn, use_container_width=True)
-                                                except Exception as e: results["knn"]["single_acc"] = "Błąd"; st.error(f"Błąd oceny KNN: {e}")
-                                        # --- Ocena XGBoost na podziale ---
-                                        with col_s2:
-                                            st.markdown("**XGBoost**")
-                                            with st.spinner("Ocena XGBoost..."):
-                                                try:
-                                                    pipeline_xgb.fit(X_train, y_train)
-                                                    y_pred_xgb = pipeline_xgb.predict(X_test)
-                                                    results["xgb"]["single_acc"] = accuracy_score(y_test, y_pred_xgb)
-                                                    results["xgb"]["conf_matrix"] = confusion_matrix(y_test, y_pred_xgb)
-                                                    st.metric("Dokładność:", f"{results['xgb']['single_acc']:.2%}")
+                                    winner_cv = "Remis"
+                                    if isinstance(results['knn'].get('cv_mean'), float) and isinstance(results['xgb'].get('cv_mean'), float):
+                                        if results['xgb']['cv_mean'] > results['knn']['cv_mean']: winner_cv = "XGBoost"
+                                        elif results['knn']['cv_mean'] > results['xgb']['cv_mean']: winner_cv = "KNN"
+                                    winner_test = "Remis"
+                                    if isinstance(results['knn'].get('single_acc'), float) and isinstance(results['xgb'].get('single_acc'), float):
+                                         if results['xgb']['single_acc'] > results['knn']['single_acc']: winner_test = "XGBoost"
+                                         elif results['knn']['single_acc'] > results['xgb']['single_acc']: winner_test = "KNN"
 
-                                                    labels_cm_xgb = sorted(pd.concat([y_test, pd.Series(y_pred_xgb)]).unique())
-                                                    labels_cm_names_xgb = ['Niecelny' if i == 0 else 'Celny' for i in labels_cm_xgb]
-                                                    if len(labels_cm_xgb)==2:
-                                                         fig_cm_xgb = px.imshow(results["xgb"]["conf_matrix"], text_auto=True, x=labels_cm_names_xgb, y=labels_cm_names_xgb, title="CM XGBoost", color_continuous_scale=px.colors.sequential.Greens)
-                                                    else:
-                                                         fig_cm_xgb = px.imshow(results["xgb"]["conf_matrix"], text_auto=True, title=f"CM XGBoost (tylko klasa: {labels_cm_names_xgb[0]})", color_continuous_scale=px.colors.sequential.Greens)
+                                    st.markdown(f"**Wnioski:**")
+                                    st.markdown(f"- Pod względem **średniej dokładności CV**: **{winner_cv}**")
+                                    st.markdown(f"- Pod względem **dokładności na podziale testowym**: **{winner_test}**")
 
-                                                    fig_cm_xgb.update_layout(height=300, title_font_size=14); st.plotly_chart(fig_cm_xgb, use_container_width=True)
-                                                except Exception as e: results["xgb"]["single_acc"] = "Błąd"; st.error(f"Błąd oceny XGBoost: {e}")
-                                        st.caption(f"Porównanie na {len(y_test)} próbkach testowych.")
-                        else: st.warning(f"Niewystarczająca ilość danych ({len(pmdc)}) do porównania modeli po usunięciu NaN. Minimum: {min_samples_for_model}.")
-                else: st.warning(f"Brak wymaganych kolumn (w tym ACTION_TYPE_SIMPLE) dla '{selected_player}'. Nie można porównać modeli.")
-             else: st.warning(f"Brak danych dla gracza '{selected_player}'.")
-        else: st.info("Wybierz gracza do porównania modeli.")
-
+                        else:
+                            st.warning(f"Niewystarczająca ilość danych ({len(pmdc)}) dla gracza '{selected_player}' do porównania modeli. Minimum wymagane: {min_samples_for_model}.")
+                else:
+                    st.warning(f"Brak wymaganych kolumn do porównania modeli dla gracza '{selected_player}'. Brakujące kolumny: {', '.join(missing_cols)}")
+            else:
+                st.warning(f"Brak danych dla gracza '{selected_player}' w wybranym typie sezonu '{selected_season_type}'.")
+        else:
+            st.info("Wybierz gracza z panelu bocznego, aby uruchomić porównanie modeli.")
 
 # Obsługa przypadku, gdy dane nie zostały wczytane poprawnie
 else:
@@ -1656,9 +1925,19 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.info("Rozszerzona Aplikacja Streamlit - Analiza NBA")
 try:
-    try: tz = pytz.timezone('Europe/Warsaw')
-    except pytz.exceptions.UnknownTimeZoneError: tz = pytz.utc
+    # Użyj strefy czasowej UTC jako fallback, jeśli 'Europe/Warsaw' nie jest dostępna
+    try:
+        tz = pytz.timezone('Europe/Warsaw')
+    except pytz.exceptions.UnknownTimeZoneError:
+        tz = pytz.utc
+        print("Ostrzeżenie: Strefa czasowa 'Europe/Warsaw' niedostępna, używam UTC.")
+
+    # Pobierz bieżącą datę i czas w odpowiedniej strefie
     ts = datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S %Z')
-except ImportError: ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S (czas lokalny)')
-except Exception: ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S (czas lokalny)')
+except ImportError:
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S (czas lokalny - brak pytz)')
+    print("Ostrzeżenie: Biblioteka 'pytz' nie jest zainstalowana.")
+except Exception as e_time:
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S (czas lokalny - błąd strefy)')
+    print(f"Błąd podczas ustawiania strefy czasowej: {e_time}")
 st.sidebar.markdown(f"Czas serwera: {ts}")
